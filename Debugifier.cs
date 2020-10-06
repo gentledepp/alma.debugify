@@ -81,15 +81,18 @@ namespace nuget.debugify
             }
 
             // replace version in csproj files
-            foreach (var projectFile in projectFiles)
-                projectFile.ReplaceVersion(cmd.Version);
+            if (!string.IsNullOrWhiteSpace(cmd.Version))
+            {
+                foreach (var projectFile in projectFiles)
+                    projectFile.ReplaceVersion(cmd.Version);
+            }
 
-            
+
             // pack the thing up
             var packFailedCount = 0;
             foreach (var projectFile in projectFiles)
             {
-                if (!DotnetPack(projectFile.Path, cmd.Verbose))
+                if (!DotnetPack(projectFile, cmd.Verbose))
                 {
                     _logger.Error($"dotnet pack failed for {Path.GetFileName(projectFile.Path)}");
                     packFailedCount++;
@@ -265,8 +268,9 @@ namespace nuget.debugify
             return sln;
         }
 
-        private bool DotnetPack(string csprojPath, bool verbose)
+        private bool DotnetPack(CsprojInfo projectFile, bool verbose)
         {
+            var csprojPath = projectFile.Path;
             if (!Path.IsPathRooted(csprojPath))
                 throw new ArgumentException($"{nameof(csprojPath)} must be rooted");
 
@@ -282,7 +286,7 @@ namespace nuget.debugify
             if(verbose)
                 _logger.Info($"{name} {args}");
             else
-                _logger.Info($"creating nupkg of {Path.GetFileName(csprojPath)}");
+                _logger.Info($"creating {projectFile.NugetPackageName}");
             
             // if the user specified just a folder, set it as working dir
             pi.WorkingDirectory = Path.GetDirectoryName(csprojPath);
