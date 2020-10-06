@@ -2,8 +2,8 @@
   "profiles": {
     "nuget.debugify": {
       "commandName": "Project",
-      "commandLineArgs": "debug -v 1.8.5",
-      "workingDirectory": "C:\\Code\\iCL.Form.PoC\\iCL.Form.Engine"
+      "commandLineArgs": "-v 1.8.5 --verbose",
+      "workingDirectory": "C:\\Code\\iCL.Form.PoC\\icl.form.engine"
     }
   }
 }
