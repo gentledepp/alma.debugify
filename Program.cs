@@ -3,9 +3,7 @@ using System.Diagnostics;
 using System.IO;
 using System.IO.Compression;
 using System.Linq;
-using System.Reflection.PortableExecutable;
 using System.Text.RegularExpressions;
-using System.Threading;
 using CommandLine;
 
 namespace nuget.debugify
@@ -62,9 +60,10 @@ namespace nuget.debugify
             var solutionDir = File.Exists(path) && string.Equals(Path.GetExtension(path), ".sln",
                 StringComparison.InvariantCultureIgnoreCase)
                 ? path
-                : RecursivelyFindSolutionDir(path);
+                : RecursivelyFindSolutionDir(path, debugCommand.Verbose);
             if (solutionDir is null)
                 return;
+            if(debugCommand.Verbose) Debug($"Found sln directory: {solutionDir}");
 
 
             var packageId = ResolveNugetFileName(path, debugCommand);
@@ -78,10 +77,13 @@ namespace nuget.debugify
                 return;
             }
 
-
             // verify, that there is a nuget package with the same id and version in the cache
-            var pathWithEnv = $@"%USERPROFILE%\.nuget\packages\{packageId}\{version}";
-            var extractPath = Environment.ExpandEnvironmentVariables(pathWithEnv);
+            var pathWithEnv = $@"%USERPROFILE%\.nuget\packages\";
+            var packageCachePath = Environment.ExpandEnvironmentVariables(pathWithEnv);
+
+            if(debugCommand.Verbose) Info($"nuget package cache fount at '{packageCachePath}'");
+
+            var extractPath = Path.Combine(packageCachePath, packageId, version);
 
             if (!Directory.Exists(extractPath))
             {
@@ -90,6 +92,7 @@ namespace nuget.debugify
             }
             
             // add pseudo file to know when do delete such a folder
+            if(debugCommand.Verbose) Debug($"Writing .debugified.txt to {extractPath}");
             File.WriteAllText(Path.Combine(extractPath, ".debugified.txt"),  "this package was debugified");
 
             using var archive = new ZipArchive(File.OpenRead(packagePath));
@@ -97,6 +100,8 @@ namespace nuget.debugify
             {
                 if (entry.FullName.StartsWith("lib") || entry.FullName.StartsWith("src"))
                 {
+                    if (debugCommand.Verbose) Debug($"Extracting {entry.FullName}");
+
                     // Gets the full path to ensure that relative segments are removed.
                     string destinationPath = Path.GetFullPath(Path.Combine(extractPath, entry.FullName));
 
@@ -109,13 +114,21 @@ namespace nuget.debugify
                         entry.ExtractToFile(destinationPath, true);
                     }
                 }
+                else
+                {
+                    if (debugCommand.Verbose) Debug($"Skipping {entry.FullName} as it does not start with 'src' or 'lib'");
+                }
+
             }
 
+            Success($"Successfully debugified {packageId} version {version}");
         }
 
-        private static string RecursivelyFindSolutionDir(string path)
+        private static string RecursivelyFindSolutionDir(string path, bool verboseLogging)
         {
             var dir = Directory.Exists(path) ? path : Path.GetDirectoryName(path);
+
+            if(verboseLogging) Debug("Searching sln directory");
 
             string sln = null;
             for (int i = 0; i < 10; i++)
@@ -124,7 +137,10 @@ namespace nuget.debugify
                 
                 // if solution is not found within the current folder, proceed with the next parent folder
                 if (sln is null)
+                {
+                    if(verboseLogging) Debug($"\tNo sln in '{dir}'");
                     dir = Path.GetDirectoryName(dir);
+                }
                 else
                 {
                     sln = Path.GetDirectoryName(sln);
@@ -169,7 +185,7 @@ namespace nuget.debugify
             return m.Groups["version"].Value;
         }
 
-        private static object ResolveNugetFileName(string path, DebugCommand debugCommand)
+        private static string ResolveNugetFileName(string path, DebugCommand debugCommand)
         {
             var csproj = path;
             var isCsprojFile = File.Exists(csproj) && string.Equals(Path.GetExtension(csproj), ".csproj",
@@ -218,7 +234,7 @@ namespace nuget.debugify
 
             var count = 0;
             // add pseudo file to know when do delete such a folder
-            foreach (var file in Directory.EnumerateFiles(extractPath, ".debugified.txt", SearchOption.AllDirectories))
+            foreach (var file in Directory.GetFiles(extractPath, ".debugified.txt", SearchOption.AllDirectories))
             {
                 var dir = Path.GetDirectoryName(file);
                 Info($"Undebugifying {dir.Substring(extractPath.Length, dir.Length-extractPath.Length)}");
