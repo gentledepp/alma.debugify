@@ -1,1 +1,1 @@
-dotnet tool uninstall nuget.debugify --global
+dotnet tool uninstall alma.debugify --global

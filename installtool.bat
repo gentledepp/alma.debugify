@@ -1,2 +1,2 @@
 Rem  --ignore-failed-sources is required if you have an authenticated feed that would fail. This would block debuget installation
-dotnet tool install nuget.debugify --global --add-source "C:\Cloudstation\nuget_dev"  --ignore-failed-sources
+dotnet tool install alma.debugify --global --add-source "C:\Cloudstation\nuget_dev"  --ignore-failed-sources
