@@ -84,7 +84,7 @@ namespace nuget.debugify
             if (!string.IsNullOrWhiteSpace(cmd.Version))
             {
                 foreach (var projectFile in projectFiles)
-                    projectFile.ReplaceVersion(cmd.Version);
+                    projectFile.ActualVersion = cmd.Version;
             }
 
 
@@ -92,7 +92,7 @@ namespace nuget.debugify
             var packFailedCount = 0;
             foreach (var projectFile in projectFiles)
             {
-                if (!DotnetPack(projectFile, cmd.Verbose))
+                if (!DotnetPack(projectFile, cmd.Version, cmd.Verbose))
                 {
                     _logger.Error($"dotnet pack failed for {Path.GetFileName(projectFile.Path)}");
                     packFailedCount++;
@@ -268,7 +268,7 @@ namespace nuget.debugify
             return sln;
         }
 
-        private bool DotnetPack(CsprojInfo projectFile, bool verbose)
+        private bool DotnetPack(CsprojInfo projectFile, string version, bool verbose)
         {
             var csprojPath = projectFile.Path;
             if (!Path.IsPathRooted(csprojPath))
@@ -279,6 +279,10 @@ namespace nuget.debugify
             var name = "dotnet";
             //var args = $"pack '{csprojPath}' --include-symbols --include-source -c Debug --force";
             var args = "pack --include-symbols --include-source -c Debug --force";
+
+            if (!string.IsNullOrEmpty(version))
+                args += $" -p:PackageVersion={version}";
+
             var pi = new ProcessStartInfo(name, args);
             pi.RedirectStandardError = true;
             pi.RedirectStandardOutput = true;
@@ -339,6 +343,7 @@ namespace nuget.debugify
         {
             public string PackageId { get; }
             public string Version { get; private set; }
+            public string ActualVersion { get; set; }
             public string Path { get; }
 
             public CsprojInfo(string packageId, string version, string path)
@@ -346,25 +351,9 @@ namespace nuget.debugify
                 PackageId = packageId;
                 Version = version;
                 Path = path;
+                ActualVersion = version;
             }
-
-            public void ReplaceVersion(string newVersion)
-            {
-                var findVersion = new Regex(@"<Version>\s*(?<version>\d+\.\d+\.\d+(\.\d+)?[\d\w_-]*?)\s*</Version>");
-
-                var txt = File.ReadAllText(Path);
-
-                var m = findVersion.Match(txt);
-                if(!m.Success)
-                    throw new InvalidOperationException($"No <Version> element found in '{Path}'");
-
-                var versionElement = m.Value;
-                File.WriteAllText(Path, txt.Replace(versionElement, $"<Version>{newVersion}</Version>"));
-
-                Version = newVersion;
-            }
-
-            public string NugetPackageName => $"{PackageId}.{Version}.symbols.nupkg";
+            public string NugetPackageName => $"{PackageId}.{ActualVersion}.symbols.nupkg";
         }
     }
 }
