@@ -1,4 +1,4 @@
-<Project Sdk="Microsoft.NET.Sdk">
+﻿<Project Sdk="Microsoft.NET.Sdk">
 
   <PropertyGroup>
     
@@ -8,6 +8,16 @@
     <PackAsTool>true</PackAsTool>
     <ToolCommandName>debugify</ToolCommandName>
     <PackageOutputPath>./nupkg</PackageOutputPath>
+    <Version>1.0.1.0</Version>
+    <Authors>gentledepp</Authors>
+    <Company />
+    <Product />
+    <Description>A dotnet tool that allows you to quickly debug your own nuget packages</Description>
+    <PackageProjectUrl></PackageProjectUrl>
+    <PackageIcon>icon\debugify.png</PackageIcon>
+    <RepositoryUrl>https://github.com/gentledepp/alma.debugify</RepositoryUrl>
+    <RepositoryType>GIT</RepositoryType>
+    <PackageTags>nuget debug</PackageTags>
 
   </PropertyGroup>
 
@@ -17,6 +27,13 @@
 
   <ItemGroup>
     <Folder Include="nupkg\" />
+  </ItemGroup>
+
+  <ItemGroup>
+    <None Update="icon\debugify.png">
+      <Pack>True</Pack>
+      <PackagePath></PackagePath>
+    </None>
   </ItemGroup>  
 
 </Project>
