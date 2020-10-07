@@ -121,7 +121,7 @@ namespace nuget.debugify
                 }
 
                 // verify, that there is a nuget package with the same id and version in the cache
-                var extractPath = Path.Combine(packageCachePath, projectFile.PackageId, projectFile.Version);
+                var extractPath = Path.Combine(packageCachePath, projectFile.PackageId, projectFile.ActualVersion);
                 if (!Directory.Exists(extractPath))
                 {
                     _logger.Warning($"Cannot debugify {packageName} as the package cannot be found in the cache: {extractPath}");
@@ -131,7 +131,7 @@ namespace nuget.debugify
                 // extract nupkg contents into package cache
                 ExtractNupkg(cmd, extractPath, packagePath);
 
-                _logger.Success($"Successfully debugified {projectFile.PackageId} version {projectFile.Version}");
+                _logger.Success($"Successfully debugified {projectFile.PackageId} version {projectFile.ActualVersion}");
             }
             
         }
