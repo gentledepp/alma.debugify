@@ -1,16 +1,13 @@
 ﻿using System;
 using System.Collections.Generic;
-using System.ComponentModel;
-using System.Data;
 using System.Diagnostics;
 using System.IO;
 using System.IO.Compression;
 using System.Linq;
-using System.Text;
 using System.Text.RegularExpressions;
 using CommandLine;
 
-namespace nuget.debugify
+namespace alma.debugify
 {
     [Verb("setup", isDefault:true, HelpText="Replaces *.dlls of a given project in the local nuget .package cache with a debuggable one so that you can actually debug its code")]
     public class DebugCommand

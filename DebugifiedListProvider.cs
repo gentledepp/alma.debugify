@@ -4,24 +4,24 @@ using CommandLine;
 
 namespace alma.debugify
 {
-    [Verb("cleanup",
-        HelpText = "Removes all debuggable *dlls from the cache so that the original can be resolved again")]
-    public class CleanupCommand
+    [Verb("list",
+        HelpText = "lists all nuget packages in the package cache that are debugified")]
+    public class ListCommand
     {
         [Option("verbose", Required = false, HelpText = "Set output to verbose messages.")]
-        public bool Verbose{ get; set; }
+        public bool Verbose { get; set; }
     }
 
-    internal class Undebugifier
+    internal class DebugifiedListProvider
     {
         private readonly ILogger _logger;
 
-        public Undebugifier(ILogger logger)
+        public DebugifiedListProvider(ILogger logger)
         {
             _logger = logger ?? throw new ArgumentNullException(nameof(logger));
         }
-        
-        public void Cleanup(CleanupCommand cmd)
+
+        public void List(ListCommand cmd)
         {
             if (cmd == null) throw new ArgumentNullException(nameof(cmd));
 
@@ -34,22 +34,22 @@ namespace alma.debugify
                 return;
             }
 
+            _logger.Info($"Listing all debugified packages at {extractPath}");
+
             var count = 0;
             // add pseudo file to know when do delete such a folder
             foreach (var file in Directory.GetFiles(extractPath, ".debugified.txt", SearchOption.AllDirectories))
             {
                 var dir = Path.GetDirectoryName(file);
-                _logger.Info($"Undebugifying {dir.Substring(extractPath.Length, dir.Length-extractPath.Length)}");
-                Directory.Delete(dir, true);
+                _logger.Info($" - {dir.Substring(extractPath.Length, dir.Length - extractPath.Length)}");
                 count++;
             }
 
             if (count == 0)
-                _logger.Success("All good. Nothing to undebugify");
+                _logger.Success("All good. Nothing debugified");
             else
-                _logger.Success($"Cleaned up {count} debugified packages");
+                _logger.Success($"Found {count} debugified packages");
         }
-
-
     }
+
 }

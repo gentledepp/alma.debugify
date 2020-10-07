@@ -1,6 +1,6 @@
 ﻿using System;
 
-namespace nuget.debugify
+namespace alma.debugify
 {
     internal interface ILogger
     {

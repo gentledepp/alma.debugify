@@ -1,14 +1,7 @@
-﻿using System;
-using System.Collections;
-using System.Collections.Generic;
-using System.Diagnostics;
-using System.IO;
-using System.IO.Compression;
-using System.Linq;
-using System.Text.RegularExpressions;
+﻿using alma.debugify;
 using CommandLine;
 
-namespace nuget.debugify
+namespace alma.debugify
 {
     class Program
     {
@@ -16,8 +9,9 @@ namespace nuget.debugify
         {
             var logger = new ConsoleLogger();
             
-            Parser.Default.ParseArguments<DebugCommand, CleanupCommand>(args)
+            Parser.Default.ParseArguments<DebugCommand, ListCommand, CleanupCommand>(args)
                 .WithParsed<DebugCommand>(c => new Debugifier(logger).Debugify(c))
+                .WithParsed<ListCommand>(c => new DebugifiedListProvider(logger).List(c))
                 .WithParsed<CleanupCommand>(c => new Undebugifier(logger).Cleanup(c));
 
         }
