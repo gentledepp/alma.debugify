@@ -84,7 +84,7 @@ namespace alma.debugify
                 if (!string.IsNullOrWhiteSpace(cmd.Version))
                 {
                     foreach (var projectFile in projectFiles)
-                        cd.Add(projectFile.ReplaceVersion(cmd.Version, _logger));
+                        cd.Add(projectFile.ReplaceVersion(cmd.Version));
                 }
 
                 // pack the thing up
@@ -354,7 +354,7 @@ namespace alma.debugify
 
             public string NugetPackageName => $"{PackageId}.{ActualVersion}.symbols.nupkg";
 
-            public IDisposable ReplaceVersion(string newVersion, ILogger logger)
+            public IDisposable ReplaceVersion(string newVersion)
             {
                 var findVersion = new Regex(@"<Version>\s*(?<version>\d+\.\d+\.\d+(\.\d+)?[\d\w_-]*?)\s*</Version>");
 
@@ -370,11 +370,20 @@ namespace alma.debugify
                 if (string.Equals(m.Groups["version"].Value, newVersion))
                     return NullDisposable.Instance;
 
+                // move original csproj to temp folder and afterwards back again so GIT does not complain about any changes
+                var tempFolder = System.IO.Path.Combine(System.IO.Path.GetTempPath(), 
+                    $"debugify_{DateTime.UtcNow:yyyMMddhhmmss}_{Guid.NewGuid():N}");
+                var tempPath = System.IO.Path.Combine(tempFolder,
+                    System.IO.Path.GetFileName(Path));
+
+                Directory.CreateDirectory(tempFolder);
+                File.Move(Path, tempPath);
+
                 var newVersionElement = $"<Version>{newVersion}</Version>";
                 File.WriteAllText(Path, txt.Replace(versionElement, newVersionElement));
                 ActualVersion = newVersion;
 
-                return new VersionRestorer(Path, newVersionElement, versionElement);
+                return new VersionRestorer(Path, tempPath);
             }
 
             private class NullDisposable : IDisposable
@@ -391,20 +400,21 @@ namespace alma.debugify
             private class VersionRestorer : IDisposable
             {
                 private readonly string _path;
-                private readonly string _current;
-                private readonly string _toRestore;
+                private readonly string _tempPath;
 
-                public VersionRestorer(string path, string current, string toRestore)
+                public VersionRestorer(string path, string tempPath)
                 {
                     _path = path;
-                    _current = current;
-                    _toRestore = toRestore;
+                    _tempPath = tempPath;
                 }
 
                 public void Dispose()
                 {
-                    var txt = File.ReadAllText(_path);
-                    File.WriteAllText(_path, txt.Replace(_current, _toRestore));
+                    File.Delete(_path);
+                    File.Move(_tempPath, _path);
+
+                    // clean up temporary data
+                    Directory.Delete(System.IO.Path.GetDirectoryName(_tempPath), true);
                 }
             }
         }
