@@ -77,27 +77,31 @@ namespace alma.debugify
                 return;
             }
 
-            // replace version in csproj files
-            if (!string.IsNullOrWhiteSpace(cmd.Version))
+            // make sur the version files are restored afterwards
+            using (var cd = new CompositeDisposable(_logger))
             {
-                foreach (var projectFile in projectFiles)
-                    projectFile.ActualVersion = cmd.Version;
-            }
-
-
-            // pack the thing up
-            var packFailedCount = 0;
-            foreach (var projectFile in projectFiles)
-            {
-                if (!DotnetPack(projectFile, cmd.Version, cmd.Verbose))
+                // replace version in csproj files
+                if (!string.IsNullOrWhiteSpace(cmd.Version))
                 {
-                    _logger.Error($"dotnet pack failed for {Path.GetFileName(projectFile.Path)}");
-                    packFailedCount++;
+                    foreach (var projectFile in projectFiles)
+                        cd.Add(projectFile.ReplaceVersion(cmd.Version, _logger));
                 }
+
+                // pack the thing up
+                var packFailedCount = 0;
+                foreach (var projectFile in projectFiles)
+                {
+                    if (!DotnetPack(projectFile, cmd.Version, cmd.Verbose))
+                    {
+                        _logger.Error($"dotnet pack failed for {Path.GetFileName(projectFile.Path)}");
+                        packFailedCount++;
+                    }
+                }
+
+                if (packFailedCount != 0)
+                    _logger.Warning(
+                        $"WARNING: Failed to create {packFailedCount} of {projectFiles.Count} *.nupkg files");
             }
-            if (packFailedCount != 0)
-                _logger.Warning($"WARNING: Failed to create {packFailedCount} of {projectFiles.Count} *.nupkg files");
-            
 
             // resolve nuget package cache
             var pathWithEnv = $@"%USERPROFILE%\.nuget\packages\";
@@ -277,9 +281,6 @@ namespace alma.debugify
             //var args = $"pack '{csprojPath}' --include-symbols --include-source -c Debug --force";
             var args = "pack --include-symbols --include-source -c Debug --force";
 
-            if (!string.IsNullOrEmpty(version))
-                args += $" -p:PackageVersion={version}";
-
             var pi = new ProcessStartInfo(name, args);
             pi.RedirectStandardError = true;
             pi.RedirectStandardOutput = true;
@@ -340,7 +341,7 @@ namespace alma.debugify
         {
             public string PackageId { get; }
             public string Version { get; private set; }
-            public string ActualVersion { get; set; }
+            public string ActualVersion { get; private set; }
             public string Path { get; }
 
             public CsprojInfo(string packageId, string version, string path)
@@ -350,7 +351,90 @@ namespace alma.debugify
                 Path = path;
                 ActualVersion = version;
             }
+
             public string NugetPackageName => $"{PackageId}.{ActualVersion}.symbols.nupkg";
+
+            public IDisposable ReplaceVersion(string newVersion, ILogger logger)
+            {
+                var findVersion = new Regex(@"<Version>\s*(?<version>\d+\.\d+\.\d+(\.\d+)?[\d\w_-]*?)\s*</Version>");
+
+                var txt = File.ReadAllText(Path);
+
+                var m = findVersion.Match(txt);
+                if (!m.Success)
+                    throw new InvalidOperationException($"No <Version> element found in '{Path}'");
+
+                var versionElement = m.Value;
+
+                // if we do not have to replace the version, ignore
+                if (string.Equals(m.Groups["version"].Value, newVersion))
+                    return NullDisposable.Instance;
+
+                var newVersionElement = $"<Version>{newVersion}</Version>";
+                File.WriteAllText(Path, txt.Replace(versionElement, newVersionElement));
+                ActualVersion = newVersion;
+
+                return new VersionRestorer(Path, newVersionElement, versionElement);
+            }
+
+            private class NullDisposable : IDisposable
+            {
+                public static IDisposable Instance = new NullDisposable();
+
+                private NullDisposable()
+                { }
+
+                public void Dispose()
+                { }
+            }
+
+            private class VersionRestorer : IDisposable
+            {
+                private readonly string _path;
+                private readonly string _current;
+                private readonly string _toRestore;
+
+                public VersionRestorer(string path, string current, string toRestore)
+                {
+                    _path = path;
+                    _current = current;
+                    _toRestore = toRestore;
+                }
+
+                public void Dispose()
+                {
+                    var txt = File.ReadAllText(_path);
+                    File.WriteAllText(_path, txt.Replace(_current, _toRestore));
+                }
+            }
+        }
+
+        private class CompositeDisposable : IDisposable
+        {
+            private readonly ILogger _logger;
+            private readonly List<IDisposable> _disposables = new List<IDisposable>();
+
+            public CompositeDisposable(ILogger logger)
+            {
+                _logger = logger;
+            }
+
+            public void Add(IDisposable child) => _disposables.Add(child);
+
+            public void Dispose()
+            {
+                foreach(var d in _disposables)
+                {
+                    try
+                    {
+                        d.Dispose();
+                    }
+                    catch (Exception x)
+                    {
+                        _logger.Error($"Error while disposing: {x.GetType().Name} {x.Message}");
+                    }
+                }
+            }
         }
     }
 }
