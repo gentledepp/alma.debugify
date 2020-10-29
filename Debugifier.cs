@@ -280,28 +280,88 @@ namespace alma.debugify
             var name = "dotnet";
             //var args = $"pack '{csprojPath}' --include-symbols --include-source -c Debug --force";
             var args = "pack --include-symbols --include-source -c Debug --force";
+            
+            _logger.Info($"creating {projectFile.NugetPackageName}");
+
+            var output = ExecuteProcess(name, args, csprojPath, verbose);
+
+
+            const string fallbackTraceMessage =
+                "error : If you are building projects that require targets from full MSBuild or MSBuildFrameworkToolsPath, you need to use desktop msbuild ('msbuild.exe') instead of 'dotnet build' or 'dotnet msbuild'";
+            var fallbackToMsBuildRequired = output.Output.Any(l => l.Contains(fallbackTraceMessage));
+
+            if (verbose)
+                _logger.Debug($"dotnet pack returned {output.ExitCode}");
+
+            if (fallbackToMsBuildRequired)
+            {
+                if(verbose) _logger.Debug("falling back to full MSBuild as advanced targets are required...");
+
+                return MsBuildPack(projectFile, verbose);
+            }
+
+            // only iif dotnet pack returns 0, everything is fine
+            return output.ExitCode == 0;
+        }
+
+        private bool MsBuildPack(CsprojInfo projectFile, bool verbose)
+        {
+            var workingDir = Path.GetDirectoryName(projectFile.Path);
+
+            // call vswhere - see: https://github.com/Microsoft/vswhere
+            var vswhereEnv = @"%ProgramFiles(x86)%\Microsoft Visual Studio\Installer\vswhere.exe";
+            var vswherePath = Environment.ExpandEnvironmentVariables(vswhereEnv);
+
+            var o = ExecuteProcess(vswherePath,
+                @"-latest -requires Microsoft.Component.MSBuild -find MSBuild\**\Bin\MSBuild.exe",
+                workingDir, verbose);
+
+            var msBuildPath = o.ExitCode == 0 ? o.Output.Single() : null;
+
+            if (verbose && o.ExitCode == 0)
+                _logger.Debug($"found msbuild at '{msBuildPath}'");
+            if (o.ExitCode != 0)
+            {
+                _logger.Error("Could not find msbuild.exe. Please ensure that you have Visual Studio 2017 or higher installed on your machine!");
+                return false;
+            }
+
+            var o2 = ExecuteProcess(msBuildPath,
+                $"\"{projectFile.Path}\" /t:pack /v:m /p:Configuration=Debug /p:IncludeSymbols=true", 
+                workingDir, verbose);
+
+            if (verbose)
+            {
+                foreach (var l in o2.Output)
+                    _logger.Verbose(l);
+            }
+
+            // only iif msbuild pack returns 0, everything is fine
+            return o2.ExitCode == 0;
+        }
+
+        private ProcessOutput ExecuteProcess(string name, string args, string workingDirectory, bool verbose)
+        {
+            if(verbose)
+                _logger.Info($"{name} {args}");
 
             var pi = new ProcessStartInfo(name, args);
             pi.RedirectStandardError = true;
             pi.RedirectStandardOutput = true;
-
-            if(verbose)
-                _logger.Info($"{name} {args}");
-            else
-                _logger.Info($"creating {projectFile.NugetPackageName}");
-            
             // if the user specified just a folder, set it as working dir
-            pi.WorkingDirectory = Path.GetDirectoryName(csprojPath);
-            
-            var output = new DataReceivedEventHandler((s, e) => 
+            pi.WorkingDirectory = Path.GetDirectoryName(workingDirectory);
+
+            var result = new ProcessOutput();
+
+            var output = new DataReceivedEventHandler((s, e) =>
             {
-                if(verbose && !string.IsNullOrEmpty(e.Data))
-                    _logger.Verbose(e.Data);
+                if (!string.IsNullOrWhiteSpace(e.Data))
+                    result.Output.Add(e.Data);
             });
             var error = new DataReceivedEventHandler((s, e) =>
             {
-                if (!string.IsNullOrEmpty(e.Data))
-                    _logger.Error(e.Data);
+                if (!string.IsNullOrWhiteSpace(e.Data))
+                    result.Output.Add(e.Data);
             });
 
             // how to forward process output to console: https://stackoverflow.com/questions/4291912/process-start-how-to-get-the-output
@@ -317,17 +377,21 @@ namespace alma.debugify
                 process.BeginErrorReadLine();
                 process.WaitForExit();
 
-                if (verbose)
-                    _logger.Debug($"dotnet pack returned {process.ExitCode}");
+                result.ExitCode = process.ExitCode;
 
-                // only iif MSBuild returns 0, everything is fine
-                return process.ExitCode == 0;
+                return result;
             }
             finally
             {
                 process.OutputDataReceived -= output;
                 process.ErrorDataReceived -= error;
             }
+        }
+
+        private class ProcessOutput
+        {
+            public List<string> Output { get; } = new List<string>();
+            public int ExitCode { get; set; }
         }
 
         private void EnsureCsprojFile(string filePath)
