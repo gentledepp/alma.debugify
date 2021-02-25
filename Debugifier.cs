@@ -20,6 +20,9 @@ namespace alma.debugify
 
         [Option('v', "version", Required=false,HelpText = "Specify the version you'd like to debugify")]
         public string Version { get; set; }
+        
+        [Option( "packargs", Required=false,HelpText = "Additional arguments for dotnet pack. e.g. \" --ignore-failed-sources\"")]
+        public string PackArguments { get; set; }
     }
 
     internal class Debugifier
@@ -70,7 +73,7 @@ namespace alma.debugify
             if(cmd.Verbose) _logger.Debug($"Found sln directory: {solutionDir}");
 
             // find all compatible project files
-            var projectFiles = EnumerateDebugifiableProjects(cmd.Path).ToList();
+            var projectFiles = EnumerateDebugifiableProjects(cmd).ToList();
             if (!projectFiles.Any())
             {
                 _logger.Warning($"Could not find any debugifiable *.csproj files in '{(File.Exists(cmd.Path) ? Path.GetDirectoryName(cmd.Path) : cmd.Path)}'");
@@ -91,7 +94,7 @@ namespace alma.debugify
                 var packFailedCount = 0;
                 foreach (var projectFile in projectFiles)
                 {
-                    if (!DotnetPack(projectFile, cmd.Version, cmd.Verbose))
+                    if (!DotnetPack(projectFile, cmd))
                     {
                         _logger.Error($"dotnet pack failed for {Path.GetFileName(projectFile.Path)}");
                         packFailedCount++;
@@ -137,13 +140,14 @@ namespace alma.debugify
             
         }
 
-        private IEnumerable<CsprojInfo> EnumerateDebugifiableProjects(string path)
+        private IEnumerable<CsprojInfo> EnumerateDebugifiableProjects(DebugCommand cmd)
         {
+            var path = cmd.Path;
             var isCsprojFile = File.Exists(path) && string.Equals(Path.GetExtension(path), ".csproj", StringComparison.InvariantCultureIgnoreCase);
             if (isCsprojFile)
             {
                 var csproj = path;
-                if (TryGetVersion(csproj, out string version))
+                if (TryGetVersion(csproj, out string version) || !string.IsNullOrWhiteSpace(cmd.Version))
                 {
                     // to be sure that the csproj is nuget-compatible, ensure it is the new csproj format
                     if (!File.ReadLines(csproj).First().Trim().StartsWith("<Project Sdk="))
@@ -152,9 +156,11 @@ namespace alma.debugify
                     {
                         var packageId = GetPackageId(csproj);
 
-                        yield return new CsprojInfo(packageId, version, csproj);   
+                        yield return new CsprojInfo(packageId, version ?? cmd.Version, csproj);   
                     }
                 }
+                else 
+                    _logger.Warning($"Project file  {Path.GetFileName(csproj)} does not contain a <Version> element. Please specify a version using the -v commandline argument.");
             }
             else
             {
@@ -162,7 +168,7 @@ namespace alma.debugify
                 path = Directory.Exists(path) ? path : Path.GetDirectoryName(path);
                 foreach(var csproj in Directory.EnumerateFiles(path, "*.csproj", SearchOption.AllDirectories))
                 {
-                    if (TryGetVersion(csproj, out string version))
+                    if (TryGetVersion(csproj, out string version) || !string.IsNullOrWhiteSpace(cmd.Version))
                     {
                         // to be sure that the csproj is nuget-compatible, ensure it is the new csproj format
                         if (!File.ReadLines(csproj).First().Trim().StartsWith("<Project Sdk="))
@@ -171,9 +177,11 @@ namespace alma.debugify
                         {
                             var packageId = GetPackageId(csproj);
 
-                            yield return new CsprojInfo(packageId, version, csproj);   
+                            yield return new CsprojInfo(packageId, version ?? cmd.Version, csproj);   
                         }
                     }
+                    else
+                        _logger.Warning($"Project file  {Path.GetFileName(csproj)} does not contain a <Version> element. Please specify a version using the -v commandline argument.");
                 }
             }
         }
@@ -269,8 +277,9 @@ namespace alma.debugify
             return sln;
         }
 
-        private bool DotnetPack(CsprojInfo projectFile, string version, bool verbose)
+        private bool DotnetPack(CsprojInfo projectFile, DebugCommand cmd)
         {
+            bool verbose = cmd.Verbose;
             var csprojPath = projectFile.Path;
             if (!Path.IsPathRooted(csprojPath))
                 throw new ArgumentException($"{nameof(csprojPath)} must be rooted");
@@ -279,7 +288,7 @@ namespace alma.debugify
             // see: https://docs.microsoft.com/en-us/dotnet/core/tools/dotnet-pack
             var name = "dotnet";
             //var args = $"pack '{csprojPath}' --include-symbols --include-source -c Debug --force";
-            var args = "pack --include-symbols --include-source -c Debug --force";
+            var args = $"pack --include-symbols --include-source -c Debug --force {cmd.PackArguments}";
             
             _logger.Info($"creating {projectFile.NugetPackageName}");
 
@@ -291,7 +300,11 @@ namespace alma.debugify
             var fallbackToMsBuildRequired = output.Output.Any(l => l.Contains(fallbackTraceMessage));
 
             if (verbose)
+            {
+                foreach (var line in output.Output)
+                    _logger.Debug(line);
                 _logger.Debug($"dotnet pack returned {output.ExitCode}");
+            }
 
             if (fallbackToMsBuildRequired)
             {
@@ -421,33 +434,56 @@ namespace alma.debugify
             public IDisposable ReplaceVersion(string newVersion)
             {
                 var findVersion = new Regex(@"<Version>\s*(?<version>\d+\.\d+\.\d+(\.\d+)?[\d\w_-]*?)\s*</Version>");
-
                 var txt = File.ReadAllText(Path);
 
                 var m = findVersion.Match(txt);
-                if (!m.Success)
-                    throw new InvalidOperationException($"No <Version> element found in '{Path}'");
+                if (m.Success)
+                {
 
-                var versionElement = m.Value;
+                    var versionElement = m.Value;
 
-                // if we do not have to replace the version, ignore
-                if (string.Equals(m.Groups["version"].Value, newVersion))
-                    return NullDisposable.Instance;
+                    // if we do not have to replace the version, ignore
+                    if (string.Equals(m.Groups["version"].Value, newVersion))
+                        return NullDisposable.Instance;
 
-                // move original csproj to temp folder and afterwards back again so GIT does not complain about any changes
-                var tempFolder = System.IO.Path.Combine(System.IO.Path.GetTempPath(), 
-                    $"debugify_{DateTime.UtcNow:yyyMMddhhmmss}_{Guid.NewGuid():N}");
-                var tempPath = System.IO.Path.Combine(tempFolder,
-                    System.IO.Path.GetFileName(Path));
+                    // move original csproj to temp folder and afterwards back again so GIT does not complain about any changes
+                    var tempFolder = System.IO.Path.Combine(System.IO.Path.GetTempPath(),
+                        $"debugify_{DateTime.UtcNow:yyyMMddhhmmss}_{Guid.NewGuid():N}");
+                    var tempPath = System.IO.Path.Combine(tempFolder,
+                        System.IO.Path.GetFileName(Path));
 
-                Directory.CreateDirectory(tempFolder);
-                File.Move(Path, tempPath);
+                    Directory.CreateDirectory(tempFolder);
+                    File.Move(Path, tempPath);
 
-                var newVersionElement = $"<Version>{newVersion}</Version>";
-                File.WriteAllText(Path, txt.Replace(versionElement, newVersionElement));
-                ActualVersion = newVersion;
+                    var newVersionElement = $"<Version>{newVersion}</Version>";
+                    File.WriteAllText(Path, txt.Replace(versionElement, newVersionElement));
+                    ActualVersion = newVersion;
 
-                return new VersionRestorer(Path, tempPath);
+                    return new VersionRestorer(Path, tempPath);
+                }
+                else
+                {
+                    var findPropertyGroup = new Regex(@"</PackageId>");
+                    var fm = findPropertyGroup.Match(txt);
+                    if(!fm.Success)
+                        throw new InvalidOperationException($"Not a single </PackageId> element could be found in '{Path}'");
+
+                    // move original csproj to temp folder and afterwards back again so GIT does not complain about any changes
+                    var tempFolder = System.IO.Path.Combine(System.IO.Path.GetTempPath(),
+                        $"debugify_{DateTime.UtcNow:yyyMMddhhmmss}_{Guid.NewGuid():N}");
+                    var tempPath = System.IO.Path.Combine(tempFolder,
+                        System.IO.Path.GetFileName(Path));
+
+                    Directory.CreateDirectory(tempFolder);
+                    File.Move(Path, tempPath);
+
+                    var newVersionElement = $"<Version>{newVersion}</Version>";
+                    // sneak in version element by replacing the FIRST <PropertyGroup> element with a </PackageId>\n<Version>....</Version> element
+                    File.WriteAllText(Path, findPropertyGroup.Replace(txt, $"</PackageId>\n" +newVersionElement, 1));
+                    ActualVersion = newVersion;
+
+                    return new VersionRestorer(Path, tempPath);
+                }
             }
 
             private class NullDisposable : IDisposable
