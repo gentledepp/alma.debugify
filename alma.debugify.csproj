@@ -8,7 +8,7 @@
     <PackAsTool>true</PackAsTool>
     <ToolCommandName>debugify</ToolCommandName>
     <PackageOutputPath>./nupkg</PackageOutputPath>
-    <Version>1.0.6.0</Version>
+    <Version>1.0.6.1</Version>
     <Authors>gentledepp</Authors>
     <Company />
     <Product />
@@ -19,7 +19,9 @@
     <RepositoryType>GIT</RepositoryType>
     <PackageTags>nuget debug</PackageTags>
     <PackageLicenseFile>LICENSE.txt</PackageLicenseFile>
-    <PackageReleaseNotes>- fallback to msbuild if additional targets are required that dotnet pack does not support
+    <PackageReleaseNotes>- supports adding additional arguments for dotnet pack
+- supports project files without &lt;version&gt; element as long as a version is provided using the -v argument
+- fallback to msbuild if additional targets are required that dotnet pack does not support
 - swapping project files so git status does not complain about "file changed though contents are the same"</PackageReleaseNotes>
 
   </PropertyGroup>
