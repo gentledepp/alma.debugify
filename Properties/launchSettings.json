@@ -2,8 +2,8 @@
   "profiles": {
     "nuget.debugify": {
       "commandName": "Project",
-      "commandLineArgs": "-v 2.3.0  --packargs \" --ignore-failed-sources\"",
-      "workingDirectory": "C:\\code_play\\module-zero-forsaken-2.3.0\\src"
+      "commandLineArgs": "-v 2.3.6  --packargs \" --ignore-failed-sources\"",
+      "workingDirectory": "C:\\Code\\iCL.Form.PoC"
     }
   }
 }

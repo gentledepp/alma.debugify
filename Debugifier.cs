@@ -83,16 +83,31 @@ namespace alma.debugify
             // make sur the version files are restored afterwards
             using (var cd = new CompositeDisposable(_logger))
             {
+                // pack the thing up
+                var packFailedCount = 0;
+                var erroredCsprojInfos = new List<CsprojInfo>();
                 // replace version in csproj files
                 if (!string.IsNullOrWhiteSpace(cmd.Version))
                 {
                     foreach (var projectFile in projectFiles)
-                        cd.Add(projectFile.ReplaceVersion(cmd.Version));
+                    {
+                        try
+                        {
+                            if(cmd.Verbose) _logger.Debug($"changing package version of {Path.GetFileName(projectFile.Path)}");
+
+                            cd.Add(projectFile.ReplaceVersion(cmd.Version));
+                        }
+                        catch (Exception x)
+                        {
+                            erroredCsprojInfos.Add(projectFile);
+                            packFailedCount++;
+
+                            _logger.Error(x.Message);
+                        }
+                    }
                 }
 
-                // pack the thing up
-                var packFailedCount = 0;
-                foreach (var projectFile in projectFiles)
+                foreach (var projectFile in projectFiles.Except(erroredCsprojInfos))
                 {
                     if (!DotnetPack(projectFile, cmd))
                     {
