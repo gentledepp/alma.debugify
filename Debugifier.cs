@@ -299,11 +299,11 @@ namespace alma.debugify
             if (!Path.IsPathRooted(csprojPath))
                 throw new ArgumentException($"{nameof(csprojPath)} must be rooted");
 
-            // dotnet pack --include-symbols --include-source -c Debug --force
+            // dotnet pack --include-symbols --include-source -c Debug
             // see: https://docs.microsoft.com/en-us/dotnet/core/tools/dotnet-pack
             var name = "dotnet";
-            //var args = $"pack '{csprojPath}' --include-symbols --include-source -c Debug --force";
-            var args = $"pack --include-symbols --include-source -c Debug --force {cmd.PackArguments}";
+            //var args = $"pack '{csprojPath}' --include-symbols --include-source -c Debug";
+            var args = $"pack --include-symbols --include-source -c Debug {cmd.PackArguments}";
             
             _logger.Info($"creating {projectFile.NugetPackageName}");
 

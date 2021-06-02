@@ -2,7 +2,7 @@
   "profiles": {
     "nuget.debugify": {
       "commandName": "Project",
-      "commandLineArgs": "-v 2.3.6  --packargs \" --ignore-failed-sources\"",
+      "commandLineArgs": "-v 3.0.1 --verbose",
       "workingDirectory": "C:\\Code\\iCL.Form.PoC"
     }
   }
