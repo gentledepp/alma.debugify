@@ -80,6 +80,9 @@ namespace alma.debugify
                 return;
             }
 
+
+            DeleteNupkgFiles(cmd.Path);
+
             // make sur the version files are restored afterwards
             using (var cd = new CompositeDisposable(_logger))
             {
@@ -131,8 +134,11 @@ namespace alma.debugify
             foreach (var projectFile in projectFiles)
             {
                 var packageName = projectFile.NugetPackageName;
+                var alternativePackageName =  projectFile.NugetPackageNameShortVersion;
+
                 var packagePath = Directory.EnumerateFiles(solutionDir, "*.nupkg", SearchOption.AllDirectories)
-                    .FirstOrDefault(p => string.Equals(packageName, Path.GetFileName(p), StringComparison.InvariantCultureIgnoreCase));
+                    .FirstOrDefault(p => string.Equals(packageName, Path.GetFileName(p), StringComparison.InvariantCultureIgnoreCase) ||
+                                         string.Equals(alternativePackageName, Path.GetFileName(p), StringComparison.InvariantCultureIgnoreCase));
                 if (packagePath is null)
                 {
                     _logger.Error($"Could not find package {packageName}");
@@ -155,27 +161,52 @@ namespace alma.debugify
             
         }
 
+        private void DeleteNupkgFiles(string cmdPath)
+        {
+            var directory = Directory.Exists(cmdPath) ? cmdPath : Path.GetDirectoryName(cmdPath);
+
+            foreach (var f in Directory.EnumerateFileSystemEntries(directory, "*.symbols.nupkg", SearchOption.AllDirectories))
+            {
+                File.Delete(f);
+                _logger.Debug($"deleting existing package {f}");
+            }
+
+        }
+
         private IEnumerable<CsprojInfo> EnumerateDebugifiableProjects(DebugCommand cmd)
         {
             var path = cmd.Path;
             var isCsprojFile = File.Exists(path) && string.Equals(Path.GetExtension(path), ".csproj", StringComparison.InvariantCultureIgnoreCase);
             if (isCsprojFile)
             {
-                var csproj = path;
-                if (TryGetVersion(csproj, out string version) || !string.IsNullOrWhiteSpace(cmd.Version))
+                // by default, ignore Test projects by convention
+                var fileName = Path.GetFileNameWithoutExtension(path);
+                if (fileName.EndsWith("Test", StringComparison.OrdinalIgnoreCase) ||
+                    fileName.EndsWith("Tests", StringComparison.OrdinalIgnoreCase))
                 {
-                    // to be sure that the csproj is nuget-compatible, ensure it is the new csproj format
-                    if (!File.ReadLines(csproj).First().Trim().StartsWith("<Project Sdk="))
-                        _logger.Warning($"Project file {Path.GetFileName(csproj)} is not supported: Only latest csproj format is supported");
-                    else
-                    {
-                        var packageId = GetPackageId(csproj);
-
-                        yield return new CsprojInfo(packageId, version ?? cmd.Version, csproj);   
-                    }
+                    _logger.Debug(
+                        $"Project file {Path.GetFileName(path)} seems to be a test project and is therefore ignored");
                 }
-                else 
-                    _logger.Warning($"Project file  {Path.GetFileName(csproj)} does not contain a <Version> element. Please specify a version using the -v commandline argument.");
+                else
+                {
+                    var csproj = path;
+                    if (TryGetVersion(csproj, out string version) || !string.IsNullOrWhiteSpace(cmd.Version))
+                    {
+                        // to be sure that the csproj is nuget-compatible, ensure it is the new csproj format
+                        if (!File.ReadLines(csproj).First().Trim().StartsWith("<Project Sdk="))
+                            _logger.Warning(
+                                $"Project file {Path.GetFileName(csproj)} is not supported: Only latest csproj format is supported");
+                        else
+                        {
+                            var packageId = GetPackageId(csproj);
+
+                            yield return new CsprojInfo(packageId, version ?? cmd.Version, csproj);
+                        }
+                    }
+                    else
+                        _logger.Warning(
+                            $"Project file  {Path.GetFileName(csproj)} does not contain a <Version> element. Please specify a version using the -v commandline argument.");
+                }
             }
             else
             {
@@ -222,12 +253,27 @@ namespace alma.debugify
         {
             EnsureCsprojFile(filePath);
 
-            var findPackageId = new Regex(@"<PackageId>(?<packageId>[\w\.]+)</PackageId>");
+            if (TryFindXmlElement(filePath, "PackageId", out var packageId)) 
+                return packageId;
+
+            if (TryFindXmlElement(filePath, "AssemblyName", out var assemblyName)) 
+                return assemblyName;
+            
+            return Path.GetFileNameWithoutExtension(filePath);
+        }
+
+        private static bool TryFindXmlElement(string filePath, string elementName, out string value)
+        {
+            var findPackageId = new Regex($@"<{elementName}>(?<packageId>[\w\.]+)</{elementName}>");
             var m = findPackageId.Match(File.ReadAllText(filePath));
             if (m.Success)
-                return m.Groups["packageId"].Value;
+            {
+                value = m.Groups["packageId"].Value;
+                return true;
+            }
 
-            return Path.GetFileNameWithoutExtension(filePath);
+            value = null;
+            return false;
         }
 
         private void ExtractNupkg(DebugCommand cmd, string extractPath, string packagePath)
@@ -443,8 +489,17 @@ namespace alma.debugify
                 Path = path;
                 ActualVersion = version;
             }
-
+            
             public string NugetPackageName => $"{PackageId}.{ActualVersion}.symbols.nupkg";
+
+            public string NugetPackageNameShortVersion => $"{PackageId}.{GetActialVersionAsWithoutRevision()}.symbols.nupkg";
+
+            private string GetActialVersionAsWithoutRevision()
+            {
+                var longVersionString = ActualVersion.ExtractVersionNumber();
+                var shortVersionString = ActualVersion.ToThreeDigitVersion();
+                return ActualVersion.Replace(longVersionString, shortVersionString);
+            }
 
             public IDisposable ReplaceVersion(string newVersion)
             {
@@ -560,6 +615,41 @@ namespace alma.debugify
                     }
                 }
             }
+        }
+    }
+
+    internal static class VersionExtensions
+    {
+        internal static string ExtractVersionNumber(this string version)
+        {
+            if (version == null) throw new ArgumentNullException(nameof(version));
+            var regex = new Regex("^(?<version>\\d+\\.\\d+\\.\\d+(\\.\\d+)?).*$");
+            if (regex.IsMatch(version))
+                return regex.Match(version).Groups["version"].Value;
+
+            return null;
+        }
+
+        internal static string ToThreeDigitVersion(this string version)
+        {
+            if (version == null) throw new ArgumentNullException(nameof(version));
+            
+            var regex = new Regex(@"^((?<major>\d+)\.(?<minor>\d+)\.(?<build>\d+)(\.(?<revision>\d+))?).*$");
+            if (!regex.IsMatch(version))
+                return version;
+
+            var m = regex.Match(version);
+
+            var major = m.Groups["major"].Value;
+            var minor = m.Groups["minor"].Value;
+            var build = m.Groups["build"].Value;
+            var revision = m.Groups["revision"].Value;
+            
+            if(!string.IsNullOrEmpty(revision) && !string.Equals(revision, "0",StringComparison.OrdinalIgnoreCase))
+                return $"{major}.{minor}.{build}.{revision}";
+
+            // if revision does not exist or equals "0", we can ignore it
+            return $"{major}.{minor}.{build}";
         }
     }
 }
