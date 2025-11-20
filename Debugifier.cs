@@ -6,11 +6,12 @@ using System.IO.Compression;
 using System.Linq;
 using System.Text.RegularExpressions;
 using CommandLine;
+using CommandLine.Text;
 using Spectre.Console;
 
 namespace alma.debugify
 {
-    [Verb("setup", isDefault:true, HelpText="Build your projects in debug mode and replace DLLs in the NuGet cache. Allows you to step through your package code while debugging applications that consume it.")]
+    [Verb("debug", isDefault:true, HelpText="Build your projects in debug mode and replace DLLs in the NuGet cache. Allows you to step through your package code while debugging applications that consume it.")]
     public class DebugCommand
     {
         [Option("verbose", Required = false, HelpText = "Set output to verbose messages.")]
@@ -30,6 +31,20 @@ namespace alma.debugify
 
         [Option( "buildargs", Required=false,HelpText = "Additional arguments for dotnet build. e.g. \" --no-restore\"")]
         public string BuildArguments { get; set; }
+
+        [Usage(ApplicationAlias = "debugify")]
+        public static IEnumerable<Example> Examples
+        {
+           get
+           {
+              return new List<Example>() {
+                 new Example("Debugify a specific version with Release configuration", new DebugCommand { Version = "1.6.6", Configuration = "Release" }),
+                 new Example("Force a full rebuild", new DebugCommand { Rebuild = true }),
+                 new Example("Specify a csproj file with a version", new DebugCommand { Path = "./MyProject.csproj", Version = "1.6.6" }),
+                 new Example("Verbose output with rebuild in Debug mode", new DebugCommand { Verbose = true, Rebuild = true, Configuration = "Debug" })
+              };
+           }
+        }
     }
 
     internal class Debugifier
