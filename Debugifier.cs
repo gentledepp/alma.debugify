@@ -6,10 +6,11 @@ using System.IO.Compression;
 using System.Linq;
 using System.Text.RegularExpressions;
 using CommandLine;
+using Spectre.Console;
 
 namespace alma.debugify
 {
-    [Verb("setup", isDefault:true, HelpText="Replaces *.dlls of a given project in the local nuget .package cache with a debuggable one so that you can actually debug its code")]
+    [Verb("setup", isDefault:true, HelpText="Build your projects in debug mode and replace DLLs in the NuGet cache. Allows you to step through your package code while debugging applications that consume it.")]
     public class DebugCommand
     {
         [Option("verbose", Required = false, HelpText = "Set output to verbose messages.")]
@@ -20,9 +21,15 @@ namespace alma.debugify
 
         [Option('v', "version", Required=false,HelpText = "Specify the version you'd like to debugify")]
         public string Version { get; set; }
-        
-        [Option( "packargs", Required=false,HelpText = "Additional arguments for dotnet pack. e.g. \" --ignore-failed-sources\"")]
-        public string PackArguments { get; set; }
+
+        [Option('c', "configuration", Required=false, Default = "Debug", HelpText = "Build configuration (Debug or Release). Default is Debug.")]
+        public string Configuration { get; set; }
+
+        [Option('r', "rebuild", Required=false, Default = false, HelpText = "Force a full rebuild of projects (slower but ensures fresh DLLs). Default is false.")]
+        public bool Rebuild { get; set; }
+
+        [Option( "buildargs", Required=false,HelpText = "Additional arguments for dotnet build. e.g. \" --no-restore\"")]
+        public string BuildArguments { get; set; }
     }
 
     internal class Debugifier
@@ -80,19 +87,60 @@ namespace alma.debugify
                 return;
             }
 
+            // resolve nuget package cache early to filter projects
+            var pathWithEnv = $@"%USERPROFILE%\.nuget\packages\";
+            var packageCachePath = Environment.ExpandEnvironmentVariables(pathWithEnv);
 
-            DeleteNupkgFiles(cmd.Path);
+            if(cmd.Verbose) _logger.Info($"nuget package cache found at '{packageCachePath}'");
 
-            // make sur the version files are restored afterwards
+            // filter to only projects that exist in the cache (avoid unnecessary builds)
+            var projectsInCache = projectFiles.Where(p =>
+            {
+                var packageBasePath = Path.Combine(packageCachePath, p.PackageId);
+                var existsInCache = Directory.Exists(packageBasePath);
+
+                if (!existsInCache && cmd.Verbose)
+                    _logger.Debug($"Skipping {p.PackageId} - not found in cache at {packageBasePath}");
+
+                return existsInCache;
+            }).ToList();
+
+            if (!projectsInCache.Any())
+            {
+                _logger.Warning($"None of the {projectFiles.Count} project(s) were found in the nuget package cache. Please restore packages first.");
+                return;
+            }
+
+            if (projectsInCache.Count < projectFiles.Count)
+            {
+                _logger.Info($"Building {projectsInCache.Count} of {projectFiles.Count} project(s) (skipping projects not in cache)");
+            }
+
+            // Display operation settings
+            var settingsTable = new Table()
+                .BorderColor(Color.Grey)
+                .Border(TableBorder.Rounded)
+                .AddColumn(new TableColumn("[cyan]Setting[/]").LeftAligned())
+                .AddColumn(new TableColumn("[white]Value[/]").LeftAligned())
+                .AddRow("[grey]Configuration[/]", $"[yellow]{cmd.Configuration}[/]")
+                .AddRow("[grey]Rebuild[/]", cmd.Rebuild ? "[green]Enabled[/]" : "[dim]Disabled[/]")
+                .AddRow("[grey]Projects to build[/]", $"[cyan]{projectsInCache.Count}[/] of [white]{projectFiles.Count}[/]");
+
+            AnsiConsole.Write(settingsTable);
+            AnsiConsole.WriteLine();
+
+            // build the projects in Debug configuration
+            var buildFailedCount = 0;
+            var erroredCsprojInfos = new List<CsprojInfo>();
+
+            // make sure the version files are restored afterwards
             using (var cd = new CompositeDisposable(_logger))
             {
-                // pack the thing up
-                var packFailedCount = 0;
-                var erroredCsprojInfos = new List<CsprojInfo>();
-                // replace version in csproj files
+
+                // replace version in csproj files if specified
                 if (!string.IsNullOrWhiteSpace(cmd.Version))
                 {
-                    foreach (var projectFile in projectFiles)
+                    foreach (var projectFile in projectsInCache)
                     {
                         try
                         {
@@ -103,75 +151,119 @@ namespace alma.debugify
                         catch (Exception x)
                         {
                             erroredCsprojInfos.Add(projectFile);
-                            packFailedCount++;
+                            buildFailedCount++;
 
                             _logger.Error(x.Message);
                         }
                     }
                 }
 
-                foreach (var projectFile in projectFiles.Except(erroredCsprojInfos))
-                {
-                    if (!DotnetPack(projectFile, cmd))
+                var projectsToBuild = projectsInCache.Except(erroredCsprojInfos).ToList();
+
+                AnsiConsole.Progress()
+                    .AutoClear(false)
+                    .Columns(new ProgressColumn[]
                     {
-                        _logger.Error($"dotnet pack failed for {Path.GetFileName(projectFile.Path)}");
-                        packFailedCount++;
-                    }
-                }
+                        new TaskDescriptionColumn(),
+                        new ProgressBarColumn(),
+                        new PercentageColumn(),
+                        new SpinnerColumn(),
+                    })
+                    .Start(ctx =>
+                    {
+                        var task = ctx.AddTask($"[cyan]Building {projectsToBuild.Count} project(s)[/]", maxValue: projectsToBuild.Count);
 
-                if (packFailedCount != 0)
+                        foreach (var projectFile in projectsToBuild)
+                        {
+                            task.Description = $"[cyan]Building[/] [white]{Path.GetFileName(projectFile.Path)}[/]";
+
+                            if (!DotnetBuild(projectFile, cmd))
+                            {
+                                _logger.Error($"dotnet build failed for {Path.GetFileName(projectFile.Path)}");
+                                buildFailedCount++;
+                                erroredCsprojInfos.Add(projectFile);
+                            }
+
+                            task.Increment(1);
+                        }
+
+                        task.Description = buildFailedCount == 0
+                            ? $"[green]Built {projectsToBuild.Count} project(s) successfully[/]"
+                            : $"[yellow]Built {projectsToBuild.Count - buildFailedCount}/{projectsToBuild.Count} project(s) successfully[/]";
+                    });
+
+                if (buildFailedCount != 0)
                     _logger.Warning(
-                        $"WARNING: Failed to create {packFailedCount} of {projectFiles.Count} *.nupkg files");
+                        $"WARNING: Failed to build {buildFailedCount} of {projectsInCache.Count} projects");
             }
 
-            // resolve nuget package cache
-            var pathWithEnv = $@"%USERPROFILE%\.nuget\packages\";
-            var packageCachePath = Environment.ExpandEnvironmentVariables(pathWithEnv);
+            // find and replace DLLs in the package cache with built binaries
+            var projectsToDebugify = projectsInCache.Except(erroredCsprojInfos).ToList();
+            var totalReplacedCount = 0;
 
-            if(cmd.Verbose) _logger.Info($"nuget package cache fount at '{packageCachePath}'");
-
-            // find each nupkg and extract it to cache
-            foreach (var projectFile in projectFiles)
-            {
-                var packageName = projectFile.NugetPackageName;
-                var alternativePackageName =  projectFile.NugetPackageNameShortVersion;
-
-                var packagePath = Directory.EnumerateFiles(solutionDir, "*.nupkg", SearchOption.AllDirectories)
-                    .FirstOrDefault(p => string.Equals(packageName, Path.GetFileName(p), StringComparison.InvariantCultureIgnoreCase) ||
-                                         string.Equals(alternativePackageName, Path.GetFileName(p), StringComparison.InvariantCultureIgnoreCase));
-                if (packagePath is null)
+            AnsiConsole.Progress()
+                .AutoClear(false)
+                .Columns(new ProgressColumn[]
                 {
-                    _logger.Error($"Could not find package {packageName}");
-                    continue;
-                }
-
-                // verify, that there is a nuget package with the same id and version in the cache
-                var extractPath = Path.Combine(packageCachePath, projectFile.PackageId, projectFile.ActualVersion);
-                if (!Directory.Exists(extractPath))
+                    new TaskDescriptionColumn(),
+                    new ProgressBarColumn(),
+                    new PercentageColumn(),
+                    new SpinnerColumn(),
+                })
+                .Start(ctx =>
                 {
-                    _logger.Warning($"Cannot debugify {packageName} as the package cannot be found in the cache: {extractPath}");
-                    continue;
-                }
-                
-                // extract nupkg contents into package cache
-                ExtractNupkg(cmd, extractPath, packagePath);
+                    var task = ctx.AddTask($"[cyan]Debugifying {projectsToDebugify.Count} package(s)[/]", maxValue: projectsToDebugify.Count);
 
-                _logger.Success($"Successfully debugified {projectFile.PackageId} version {projectFile.ActualVersion}");
-            }
+                    foreach (var projectFile in projectsToDebugify)
+                    {
+                        task.Description = $"[cyan]Debugifying[/] [white]{projectFile.PackageId}[/]";
+
+                        // find bin\<Configuration> folder for this project
+                        var projectDir = Path.GetDirectoryName(projectFile.Path);
+                        var binConfigPath = Path.Combine(projectDir, "bin", cmd.Configuration);
+
+                        if (!Directory.Exists(binConfigPath))
+                        {
+                            _logger.Error($"Could not find bin\\{cmd.Configuration} folder for {projectFile.PackageId}");
+                            task.Increment(1);
+                            continue;
+                        }
+
+                        // find all DLLs in bin\<Configuration> (recursively to handle different frameworks)
+                        var builtDlls = Directory.EnumerateFiles(binConfigPath, "*.dll", SearchOption.AllDirectories).ToList();
+                        var builtPdbs = Directory.EnumerateFiles(binConfigPath, "*.pdb", SearchOption.AllDirectories).ToList();
+
+                        if (!builtDlls.Any())
+                        {
+                            _logger.Warning($"No DLLs found in {binConfigPath}");
+                            task.Increment(1);
+                            continue;
+                        }
+
+                        if(cmd.Verbose) _logger.Debug($"Found {builtDlls.Count} DLL(s) in {binConfigPath}");
+
+                        // replace DLLs in all versions of the package (or specific version if provided)
+                        var packageBasePath = Path.Combine(packageCachePath, projectFile.PackageId);
+                        var replacedCount = FindAndReplaceDlls(cmd, packageBasePath, builtDlls, builtPdbs, projectFile.PackageId);
+
+                        if (replacedCount > 0)
+                        {
+                            _logger.Success($"Successfully debugified {projectFile.PackageId} - replaced {replacedCount} file(s)");
+                            totalReplacedCount += replacedCount;
+                        }
+                        else
+                            _logger.Warning($"No matching DLLs found in cache for {projectFile.PackageId}");
+
+                        task.Increment(1);
+                    }
+
+                    task.Description = totalReplacedCount > 0
+                        ? $"[green]Debugified {projectsToDebugify.Count} package(s) - {totalReplacedCount} file(s) replaced[/]"
+                        : $"[yellow]Processed {projectsToDebugify.Count} package(s) - no files replaced[/]";
+                });
             
         }
 
-        private void DeleteNupkgFiles(string cmdPath)
-        {
-            var directory = Directory.Exists(cmdPath) ? cmdPath : Path.GetDirectoryName(cmdPath);
-
-            foreach (var f in Directory.EnumerateFileSystemEntries(directory, "*.symbols.nupkg", SearchOption.AllDirectories))
-            {
-                File.Delete(f);
-                _logger.Debug($"deleting existing package {f}");
-            }
-
-        }
 
         private IEnumerable<CsprojInfo> EnumerateDebugifiableProjects(DebugCommand cmd)
         {
@@ -276,36 +368,136 @@ namespace alma.debugify
             return false;
         }
 
-        private void ExtractNupkg(DebugCommand cmd, string extractPath, string packagePath)
+        private static string ExtractTargetFrameworkFromPath(string filePath)
         {
-            // add pseudo file to know when do delete such a folder
-            if (cmd.Verbose) _logger.Debug($"Writing .debugified.txt to {extractPath}");
-            File.WriteAllText(Path.Combine(extractPath, ".debugified.txt"), "this package was debugified");
+            // Try to extract TFM from path like:
+            // bin\Debug\net6.0\MyLib.dll -> net6.0
+            // lib\netstandard2.0\MyLib.dll -> netstandard2.0
+            // Common TFM patterns: net6.0, net8.0, netstandard2.0, netstandard2.1, net472, net48, etc.
 
-            using var archive = new ZipArchive(File.OpenRead(packagePath));
-            foreach (var entry in archive.Entries)
+            var pathParts = filePath.Split(new[] { Path.DirectorySeparatorChar, Path.AltDirectorySeparatorChar }, StringSplitOptions.RemoveEmptyEntries);
+
+            // Common TFM patterns (in order of priority)
+            var tfmPatterns = new[]
             {
-                if (entry.FullName.StartsWith("lib") || entry.FullName.StartsWith("src"))
+                @"^net\d+\.\d+$",           // net6.0, net8.0
+                @"^netstandard\d+\.\d+$",   // netstandard2.0, netstandard2.1
+                @"^netcoreapp\d+\.\d+$",    // netcoreapp3.1
+                @"^net\d+$",                 // net48, net472, net6, net8
+                @"^net\d{3}$",               // net472, net48, etc.
+            };
+
+            // Search backwards through path parts to find TFM (usually closer to filename)
+            for (int i = pathParts.Length - 2; i >= 0; i--)
+            {
+                var part = pathParts[i];
+                foreach (var pattern in tfmPatterns)
                 {
-                    if (cmd.Verbose) _logger.Debug($"Extracting {entry.FullName}");
-
-                    // Gets the full path to ensure that relative segments are removed.
-                    string destinationPath = Path.GetFullPath(Path.Combine(extractPath, entry.FullName));
-
-                    // Ordinal match is safest, case-sensitive volumes can be mounted within volumes that
-                    // are case-insensitive.
-                    if (destinationPath.StartsWith(extractPath, StringComparison.Ordinal))
+                    if (Regex.IsMatch(part, pattern, RegexOptions.IgnoreCase))
                     {
-                        // ensure the subdirectories exist
-                        Directory.CreateDirectory(Path.GetDirectoryName(destinationPath));
-                        entry.ExtractToFile(destinationPath, true);
+                        return part.ToLowerInvariant();
                     }
                 }
-                else
+            }
+
+            return null;
+        }
+
+        private int FindAndReplaceDlls(DebugCommand cmd, string packageBasePath, List<string> debugDlls, List<string> debugPdbs, string packageId)
+        {
+            int replacedCount = 0;
+
+            // iterate through all versions of the package in the cache
+            foreach (var versionDir in Directory.EnumerateDirectories(packageBasePath))
+            {
+                // add marker file to know when to delete such a folder during cleanup
+                var markerFile = Path.Combine(versionDir, ".debugified.txt");
+                var timestamp = DateTime.UtcNow.ToString("o"); // ISO 8601 format
+                if (cmd.Verbose) _logger.Debug($"Writing .debugified.txt to {versionDir}");
+                File.WriteAllText(markerFile, $"Debugified at {timestamp} UTC");
+
+                // search for lib folder in the package cache
+                var libPath = Path.Combine(versionDir, "lib");
+                if (!Directory.Exists(libPath))
                 {
-                    if (cmd.Verbose) _logger.Debug($"Skipping {entry.FullName} as it does not start with 'src' or 'lib'");
+                    if (cmd.Verbose) _logger.Debug($"No 'lib' folder found in {versionDir}");
+                    continue;
+                }
+
+                // find all DLLs and PDBs in the lib folder
+                var cachedDlls = Directory.EnumerateFiles(libPath, "*.dll", SearchOption.AllDirectories).ToList();
+                var cachedPdbs = Directory.EnumerateFiles(libPath, "*.pdb", SearchOption.AllDirectories).ToList();
+
+                // match and replace DLLs by filename AND target framework
+                foreach (var cachedDll in cachedDlls)
+                {
+                    var cachedFileName = Path.GetFileName(cachedDll);
+                    var cachedTfm = ExtractTargetFrameworkFromPath(cachedDll);
+
+                    var matchingDebugDll = debugDlls.FirstOrDefault(d =>
+                    {
+                        // Filename must match
+                        if (!string.Equals(Path.GetFileName(d), cachedFileName, StringComparison.OrdinalIgnoreCase))
+                            return false;
+
+                        // If both have TFM, they must match
+                        var debugTfm = ExtractTargetFrameworkFromPath(d);
+                        if (cachedTfm != null && debugTfm != null)
+                            return string.Equals(cachedTfm, debugTfm, StringComparison.OrdinalIgnoreCase);
+
+                        // If at least one has no TFM, allow match (backward compatibility)
+                        return true;
+                    });
+
+                    if (matchingDebugDll != null)
+                    {
+                        if (cmd.Verbose)
+                        {
+                            // Show relative path from version directory for cleaner output
+                            var relativePath = Path.GetRelativePath(versionDir, cachedDll);
+                            _logger.Debug($"  → {relativePath}");
+                        }
+                        File.Copy(matchingDebugDll, cachedDll, true);
+                        replacedCount++;
+                    }
+                }
+
+                // match and replace PDBs by filename AND target framework
+                foreach (var cachedPdb in cachedPdbs)
+                {
+                    var cachedFileName = Path.GetFileName(cachedPdb);
+                    var cachedTfm = ExtractTargetFrameworkFromPath(cachedPdb);
+
+                    var matchingDebugPdb = debugPdbs.FirstOrDefault(p =>
+                    {
+                        // Filename must match
+                        if (!string.Equals(Path.GetFileName(p), cachedFileName, StringComparison.OrdinalIgnoreCase))
+                            return false;
+
+                        // If both have TFM, they must match
+                        var debugTfm = ExtractTargetFrameworkFromPath(p);
+                        if (cachedTfm != null && debugTfm != null)
+                            return string.Equals(cachedTfm, debugTfm, StringComparison.OrdinalIgnoreCase);
+
+                        // If at least one has no TFM, allow match (backward compatibility)
+                        return true;
+                    });
+
+                    if (matchingDebugPdb != null)
+                    {
+                        if (cmd.Verbose)
+                        {
+                            // Show relative path from version directory for cleaner output
+                            var relativePath = Path.GetRelativePath(versionDir, cachedPdb);
+                            _logger.Debug($"  → {relativePath}");
+                        }
+                        File.Copy(matchingDebugPdb, cachedPdb, true);
+                        replacedCount++;
+                    }
                 }
             }
+
+            return replacedCount;
         }
 
         private string RecursivelyFindSolutionDir(string path, bool verboseLogging)
@@ -338,23 +530,22 @@ namespace alma.debugify
             return sln;
         }
 
-        private bool DotnetPack(CsprojInfo projectFile, DebugCommand cmd)
+        private bool DotnetBuild(CsprojInfo projectFile, DebugCommand cmd)
         {
             bool verbose = cmd.Verbose;
             var csprojPath = projectFile.Path;
             if (!Path.IsPathRooted(csprojPath))
                 throw new ArgumentException($"{nameof(csprojPath)} must be rooted");
 
-            // dotnet pack --include-symbols --include-source -c Debug
-            // see: https://docs.microsoft.com/en-us/dotnet/core/tools/dotnet-pack
+            // dotnet build -c <Configuration> [--no-incremental if rebuild requested]
+            // see: https://docs.microsoft.com/en-us/dotnet/core/tools/dotnet-build
             var name = "dotnet";
-            //var args = $"pack '{csprojPath}' --include-symbols --include-source -c Debug";
-            var args = $"pack --include-symbols --include-source -c Debug {cmd.PackArguments}";
-            
-            _logger.Info($"creating {projectFile.NugetPackageName}");
+            var rebuildFlag = cmd.Rebuild ? "--no-incremental" : "";
+            var args = $"build -c {cmd.Configuration} {rebuildFlag} {cmd.BuildArguments}".Trim();
+
+            _logger.Info($"building {Path.GetFileName(projectFile.Path)} ({cmd.Configuration})");
 
             var output = ExecuteProcess(name, args, csprojPath, verbose);
-
 
             const string fallbackTraceMessage =
                 "error : If you are building projects that require targets from full MSBuild or MSBuildFrameworkToolsPath, you need to use desktop msbuild ('msbuild.exe') instead of 'dotnet build' or 'dotnet msbuild'";
@@ -364,21 +555,21 @@ namespace alma.debugify
             {
                 foreach (var line in output.Output)
                     _logger.Debug(line);
-                _logger.Debug($"dotnet pack returned {output.ExitCode}");
+                _logger.Debug($"dotnet build returned {output.ExitCode}");
             }
 
             if (fallbackToMsBuildRequired)
             {
                 if(verbose) _logger.Debug("falling back to full MSBuild as advanced targets are required...");
 
-                return MsBuildPack(projectFile, verbose);
+                return MsBuildBuild(projectFile, cmd.Configuration, cmd.Rebuild, verbose);
             }
 
-            // only iif dotnet pack returns 0, everything is fine
+            // only if dotnet build returns 0, everything is fine
             return output.ExitCode == 0;
         }
 
-        private bool MsBuildPack(CsprojInfo projectFile, bool verbose)
+        private bool MsBuildBuild(CsprojInfo projectFile, string configuration, bool rebuild, bool verbose)
         {
             var workingDir = Path.GetDirectoryName(projectFile.Path);
 
@@ -400,8 +591,9 @@ namespace alma.debugify
                 return false;
             }
 
+            var target = rebuild ? "rebuild" : "build";
             var o2 = ExecuteProcess(msBuildPath,
-                $"\"{projectFile.Path}\" /t:pack /v:m /p:Configuration=Debug /p:IncludeSymbols=true", 
+                $"\"{projectFile.Path}\" /t:{target} /v:m /p:Configuration={configuration}",
                 workingDir, verbose);
 
             if (verbose)
@@ -410,7 +602,7 @@ namespace alma.debugify
                     _logger.Verbose(l);
             }
 
-            // only iif msbuild pack returns 0, everything is fine
+            // only if msbuild build returns 0, everything is fine
             return o2.ExitCode == 0;
         }
 

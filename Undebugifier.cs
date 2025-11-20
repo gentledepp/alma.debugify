@@ -5,7 +5,7 @@ using CommandLine;
 namespace alma.debugify
 {
     [Verb("cleanup",
-        HelpText = "Removes all debuggable *dlls from the cache so that the original can be resolved again")]
+        HelpText = "Remove all debug DLLs from the NuGet cache and restore original package files (undoes debugify changes)")]
     public class CleanupCommand
     {
         [Option("verbose", Required = false, HelpText = "Set output to verbose messages.")]

@@ -1,4 +1,5 @@
 ﻿using System;
+using Spectre.Console;
 
 namespace alma.debugify
 {
@@ -16,39 +17,27 @@ namespace alma.debugify
     {
         public void Verbose(string message)
         {
-            WriteWithColor(message, ConsoleColor.DarkGray);
+            AnsiConsole.MarkupLine($"[dim]{Markup.Escape(message)}[/]");
         }
         public void Debug(string message)
         {
-            WriteWithColor(message, ConsoleColor.Gray);
+            AnsiConsole.MarkupLine($"[grey]{Markup.Escape(message)}[/]");
         }
         public void Info(string message)
         {
-            WriteWithColor(message, ConsoleColor.White);
+            AnsiConsole.MarkupLine($"[white]{Markup.Escape(message)}[/]");
         }
         public void Success(string message)
         {
-            WriteWithColor(message, ConsoleColor.Green);
+            AnsiConsole.MarkupLine($"[green]✓[/] {Markup.Escape(message)}");
         }
         public void Warning(string message)
         {
-            WriteWithColor(message, ConsoleColor.DarkYellow);
+            AnsiConsole.MarkupLine($"[yellow]⚠[/] {Markup.Escape(message)}");
         }
         public void Error(string message)
         {
-            WriteWithColor(message, ConsoleColor.Red);
-        }
-        private void WriteWithColor(string message, ConsoleColor? foreground = null, ConsoleColor? background = null)
-        {
-            var c = Console.ForegroundColor;
-            var b = Console.BackgroundColor;
-            if(foreground.HasValue)
-                Console.ForegroundColor = foreground.Value;
-            if(background.HasValue)
-                Console.BackgroundColor = background.Value;
-            Console.WriteLine(message);
-            Console.ForegroundColor = c;
-            Console.BackgroundColor = b;
+            AnsiConsole.MarkupLine($"[red]✗[/] {Markup.Escape(message)}");
         }
     }
 }
