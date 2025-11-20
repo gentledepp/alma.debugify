@@ -3,12 +3,12 @@
   <PropertyGroup>
     
     <OutputType>Exe</OutputType>
-    <TargetFramework>net8.0</TargetFramework>
+    <TargetFrameworks>net9.0</TargetFrameworks>
 
     <PackAsTool>true</PackAsTool>
     <ToolCommandName>debugify</ToolCommandName>
     <PackageOutputPath>./nupkg</PackageOutputPath>
-    <Version>1.2.0.0</Version>
+    <Version>1.3.0.0</Version>
     <Authors>gentledepp</Authors>
     <Company />
     <Product />
@@ -20,6 +20,15 @@
     <PackageTags>nuget debug</PackageTags>
     <PackageLicenseFile>LICENSE.txt</PackageLicenseFile>
     <PackageReleaseNotes>
+		#1.3.0.0
+		- rebuild option (--rebuild -r)
+		- shows current configuration and if rebuild is enabled
+		- writes current date to debugified file
+		- if verbose, outputs relative path of every replaced file
+		- spectre console beautification
+		- supports release build
+		- does not create nuget packages anymore but directly replaces dlls
+		- skips building projects that do not exist in the cache (by project name and &lt;PackageId&gt;)
         #1.2.0.0
         - target .net 8
 		#1.1.0.0
@@ -40,20 +49,49 @@
 
   </PropertyGroup>
 
-  <ItemGroup>
+
+
+	<PropertyGroup Condition="'$(Configuration)|$(Platform)'=='Release|AnyCPU'">
+		<GeneratePackageOnBuild>true</GeneratePackageOnBuild>
+		<!-- for nuget sources debug-->
+		<PublishRepositoryUrl>true</PublishRepositoryUrl>
+		<EmbedUntrackedSources>true</EmbedUntrackedSources>
+		<IncludeSymbols>true</IncludeSymbols>
+		<IncludeSource>true</IncludeSource>
+		<SymbolPackageFormat>snupkg</SymbolPackageFormat>
+		<!---normalizes filepaths when build by ci (CI is set by ci pipeline)-->
+		<ContinuousIntegrationBuild>true</ContinuousIntegrationBuild>
+	</PropertyGroup>
+
+
+
+	<ItemGroup>
+	  <None Remove="icon\debugify.png" />
+	</ItemGroup>
+
+
+
+	<ItemGroup>
+		<Content Include="icon\debugify.png">
+			<Pack>True</Pack>
+			<PackagePath>icon\</PackagePath>
+		</Content>
+	</ItemGroup>
+	<ItemGroup>
+		<PackageReference Include="Microsoft.SourceLink.GitHub" Version="8.0.0">
+			<PrivateAssets>all</PrivateAssets>
+			<IncludeAssets>runtime; build; native; contentfiles; analyzers</IncludeAssets>
+		</PackageReference>
+	</ItemGroup>
+
+
+
+	<ItemGroup>
     <PackageReference Include="CommandLineParser" Version="2.8.0" />
     <PackageReference Include="Spectre.Console" Version="0.49.1" />
   </ItemGroup>
 
   <ItemGroup>
-    <Folder Include="nupkg\" />
-  </ItemGroup>
-
-  <ItemGroup>
-    <None Update="icon\debugify.png">
-      <Pack>True</Pack>
-      <PackagePath></PackagePath>
-    </None>
     <None Include="LICENSE.txt">
       <Pack>True</Pack>
       <PackagePath></PackagePath>
