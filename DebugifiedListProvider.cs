@@ -5,7 +5,7 @@ using CommandLine;
 namespace alma.debugify
 {
     [Verb("list",
-        HelpText = "lists all nuget packages in the package cache that are debugified")]
+        HelpText = "List all NuGet packages in the local cache that have been debugified (shows packages with debug DLLs)")]
     public class ListCommand
     {
         [Option("verbose", Required = false, HelpText = "Set output to verbose messages.")]

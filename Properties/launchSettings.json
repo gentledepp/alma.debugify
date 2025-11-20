@@ -2,8 +2,8 @@
   "profiles": {
     "nuget.debugify": {
       "commandName": "Project",
-      "commandLineArgs": "-v 3.0.1 --verbose",
-      "workingDirectory": "C:\\Code\\iCL.Form.PoC"
+      "commandLineArgs": "-v 1.6.6 -c Release --verbose",
+      "workingDirectory": "C:\\Code_gh\\Dotmim.Sync_gd\\Projects"
     }
   }
 }

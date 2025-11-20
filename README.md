@@ -29,3 +29,75 @@ Meet ✨debugify✨
 - and even best, because it creates a marker file `.debugified` into the folder of each debugified package (%userprofile%\.nuget\packages\&lt;packageid&gt;\1.8.5) you can clean it all up by simply calling `debugify cleanup` *anywhere*!
 
 What do you think? 🥳
+
+## Installation
+
+Install debugify as a global dotnet tool:
+
+```bash
+dotnet tool install --global alma.debugify
+```
+
+## Usage Examples
+
+### Basic Usage
+
+Debugify packages in the current directory:
+```bash
+debugify
+```
+
+### Specify Version with Release Configuration
+
+Debugify a specific version and build in Release mode:
+```bash
+debugify -v 1.6.6 -c Release
+```
+
+### Force Rebuild
+
+Force a full rebuild to ensure fresh DLLs:
+```bash
+debugify --rebuild
+```
+or using the short form:
+```bash
+debugify -r
+```
+
+### Specify a Specific Project File
+
+Debugify a specific .csproj file with a version:
+```bash
+debugify -p ./MyProject.csproj -v 1.6.6
+```
+
+### Verbose Output with Rebuild
+
+Get detailed output while forcing a rebuild:
+```bash
+debugify --verbose --rebuild -c Debug
+```
+
+### Cleanup
+
+Remove all debug DLLs from the NuGet cache:
+```bash
+debugify cleanup
+```
+
+### List Debugified Packages
+
+Show all packages that have been debugified:
+```bash
+debugify list
+```
+
+## Command-Line Options
+
+- `-v, --version` - Specify the version you'd like to debugify
+- `-c, --configuration` - Build configuration (Debug or Release). Default is Debug
+- `-r, --rebuild` - Force a full rebuild of projects (slower but ensures fresh DLLs)
+- `-p, --path` - Path to *.csproj file or a folder that contains it
+- `--verbose` - Set output to verbose messages
+- `--buildargs` - Additional arguments for dotnet build (e.g., " --no-restore")
