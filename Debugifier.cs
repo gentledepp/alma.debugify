@@ -257,9 +257,9 @@ namespace alma.debugify
 
                         if(cmd.Verbose) _logger.Debug($"Found {builtDlls.Count} DLL(s) in {binConfigPath}");
 
-                        // replace DLLs in all versions of the package (or specific version if provided)
+                        // replace DLLs in the matching version of the package
                         var packageBasePath = Path.Combine(packageCachePath, projectFile.PackageId);
-                        var replacedCount = FindAndReplaceDlls(cmd, packageBasePath, builtDlls, builtPdbs, projectFile.PackageId);
+                        var replacedCount = FindAndReplaceDlls(cmd, packageBasePath, builtDlls, builtPdbs, projectFile.PackageId, projectFile.Version);
 
                         if (replacedCount > 0)
                         {
@@ -344,16 +344,52 @@ namespace alma.debugify
             EnsureCsprojFile(filePath);
 
             var findVersion = new Regex(@"<Version>\s*(?<version>\d+\.\d+\.\d+(\.\d+)?[\d\w_-]*?)\s*</Version>");
-            
+
+            // First, try to find version in the csproj itself
             var m = findVersion.Match(File.ReadAllText(filePath));
-            if (!m.Success)
+            if (m.Success)
             {
-                version = null;
-                return false;
+                version = m.Groups["version"].Value;
+                return true;
             }
 
-            version = m.Groups["version"].Value;
-            return true;
+            // If not found in csproj, search for Directory.Build.props in parent hierarchy
+            if (TryFindDirectoryBuildProps(filePath, out var buildPropsPath))
+            {
+                m = findVersion.Match(File.ReadAllText(buildPropsPath));
+                if (m.Success)
+                {
+                    version = m.Groups["version"].Value;
+                    return true;
+                }
+            }
+
+            version = null;
+            return false;
+        }
+
+        private bool TryFindDirectoryBuildProps(string startPath, out string buildPropsPath)
+        {
+            // Start from the directory containing the csproj
+            var currentDir = Path.GetDirectoryName(startPath);
+
+            // Walk up the directory hierarchy
+            while (currentDir != null)
+            {
+                var candidatePath = Path.Combine(currentDir, "Directory.Build.props");
+                if (File.Exists(candidatePath))
+                {
+                    buildPropsPath = candidatePath;
+                    return true;
+                }
+
+                // Move to parent directory
+                var parent = Directory.GetParent(currentDir);
+                currentDir = parent?.FullName;
+            }
+
+            buildPropsPath = null;
+            return false;
         }
 
         private string GetPackageId(string filePath)
@@ -371,7 +407,7 @@ namespace alma.debugify
 
         private static bool TryFindXmlElement(string filePath, string elementName, out string value)
         {
-            var findPackageId = new Regex($@"<{elementName}>(?<packageId>[\w\.]+)</{elementName}>");
+            var findPackageId = new Regex($@"<{elementName}>(?<packageId>[\w\.\-]+)</{elementName}>");
             var m = findPackageId.Match(File.ReadAllText(filePath));
             if (m.Success)
             {
@@ -418,98 +454,145 @@ namespace alma.debugify
             return null;
         }
 
-        private int FindAndReplaceDlls(DebugCommand cmd, string packageBasePath, List<string> debugDlls, List<string> debugPdbs, string packageId)
+        private static string ExtractVersionFromPath(string versionDir)
+        {
+            // Extract version from path like: C:\Users\...\packages\PackageName\1.3.11\
+            var dirName = Path.GetFileName(versionDir.TrimEnd(Path.DirectorySeparatorChar, Path.AltDirectorySeparatorChar));
+
+            // Version pattern: major.minor.patch[.revision][-prerelease]
+            var versionPattern = new Regex(@"^(?<version>\d+\.\d+\.\d+(\.\d+)?([\d\w_-]*?)?)$");
+            var match = versionPattern.Match(dirName);
+
+            return match.Success ? match.Groups["version"].Value : null;
+        }
+
+        private static bool VersionsMatch(string version1, string version2)
+        {
+            if (string.IsNullOrEmpty(version1) || string.IsNullOrEmpty(version2))
+                return false;
+
+            // Normalize versions by trimming and lowercasing
+            return string.Equals(
+                version1.Trim(),
+                version2.Trim(),
+                StringComparison.OrdinalIgnoreCase
+            );
+        }
+
+        private int ProcessCacheFolder(DebugCommand cmd, string folderPath, string versionDir, List<string> debugDlls, List<string> debugPdbs, string folderType)
+        {
+            int replacedCount = 0;
+
+            if (!Directory.Exists(folderPath))
+            {
+                if (cmd.Verbose) _logger.Debug($"No '{folderType}' folder found in {versionDir}");
+                return 0;
+            }
+
+            // Find all DLLs and PDBs in the folder
+            var cachedDlls = Directory.EnumerateFiles(folderPath, "*.dll", SearchOption.AllDirectories).ToList();
+            var cachedPdbs = Directory.EnumerateFiles(folderPath, "*.pdb", SearchOption.AllDirectories).ToList();
+
+            // Match and replace DLLs by filename AND target framework
+            foreach (var cachedDll in cachedDlls)
+            {
+                var cachedFileName = Path.GetFileName(cachedDll);
+                var cachedTfm = ExtractTargetFrameworkFromPath(cachedDll);
+
+                var matchingDebugDll = debugDlls.FirstOrDefault(d =>
+                {
+                    // Filename must match
+                    if (!string.Equals(Path.GetFileName(d), cachedFileName, StringComparison.OrdinalIgnoreCase))
+                        return false;
+
+                    // If both have TFM, they must match
+                    var debugTfm = ExtractTargetFrameworkFromPath(d);
+                    if (cachedTfm != null && debugTfm != null)
+                        return string.Equals(cachedTfm, debugTfm, StringComparison.OrdinalIgnoreCase);
+
+                    // If at least one has no TFM, allow match (backward compatibility)
+                    return true;
+                });
+
+                if (matchingDebugDll != null)
+                {
+                    if (cmd.Verbose)
+                    {
+                        var relativePath = Path.GetRelativePath(versionDir, cachedDll);
+                        _logger.Debug($"  → {relativePath}");
+                    }
+                    File.Copy(matchingDebugDll, cachedDll, true);
+                    replacedCount++;
+                }
+            }
+
+            // Match and replace PDBs by filename AND target framework
+            foreach (var cachedPdb in cachedPdbs)
+            {
+                var cachedFileName = Path.GetFileName(cachedPdb);
+                var cachedTfm = ExtractTargetFrameworkFromPath(cachedPdb);
+
+                var matchingDebugPdb = debugPdbs.FirstOrDefault(p =>
+                {
+                    // Filename must match
+                    if (!string.Equals(Path.GetFileName(p), cachedFileName, StringComparison.OrdinalIgnoreCase))
+                        return false;
+
+                    // If both have TFM, they must match
+                    var debugTfm = ExtractTargetFrameworkFromPath(p);
+                    if (cachedTfm != null && debugTfm != null)
+                        return string.Equals(cachedTfm, debugTfm, StringComparison.OrdinalIgnoreCase);
+
+                    // If at least one has no TFM, allow match (backward compatibility)
+                    return true;
+                });
+
+                if (matchingDebugPdb != null)
+                {
+                    if (cmd.Verbose)
+                    {
+                        var relativePath = Path.GetRelativePath(versionDir, cachedPdb);
+                        _logger.Debug($"  → {relativePath}");
+                    }
+                    File.Copy(matchingDebugPdb, cachedPdb, true);
+                    replacedCount++;
+                }
+            }
+
+            return replacedCount;
+        }
+
+        private int FindAndReplaceDlls(DebugCommand cmd, string packageBasePath, List<string> debugDlls, List<string> debugPdbs, string packageId, string expectedVersion)
         {
             int replacedCount = 0;
 
             // iterate through all versions of the package in the cache
             foreach (var versionDir in Directory.EnumerateDirectories(packageBasePath))
             {
+                // Extract version from directory name
+                var cachedVersion = ExtractVersionFromPath(versionDir);
+
+                // Skip if version doesn't match expected version
+                if (!VersionsMatch(cachedVersion, expectedVersion))
+                {
+                    if (cmd.Verbose)
+                        _logger.Debug($"Skipping version {cachedVersion} (expected {expectedVersion})");
+                    continue;
+                }
+
                 // add marker file to know when to delete such a folder during cleanup
                 var markerFile = Path.Combine(versionDir, ".debugified.txt");
                 var timestamp = DateTime.UtcNow.ToString("o"); // ISO 8601 format
                 if (cmd.Verbose) _logger.Debug($"Writing .debugified.txt to {versionDir}");
                 File.WriteAllText(markerFile, $"Debugified at {timestamp} UTC");
 
-                // search for lib folder in the package cache
+                // Process lib folder
                 var libPath = Path.Combine(versionDir, "lib");
-                if (!Directory.Exists(libPath))
-                {
-                    if (cmd.Verbose) _logger.Debug($"No 'lib' folder found in {versionDir}");
-                    continue;
-                }
+                replacedCount += ProcessCacheFolder(cmd, libPath, versionDir, debugDlls, debugPdbs, "lib");
 
-                // find all DLLs and PDBs in the lib folder
-                var cachedDlls = Directory.EnumerateFiles(libPath, "*.dll", SearchOption.AllDirectories).ToList();
-                var cachedPdbs = Directory.EnumerateFiles(libPath, "*.pdb", SearchOption.AllDirectories).ToList();
-
-                // match and replace DLLs by filename AND target framework
-                foreach (var cachedDll in cachedDlls)
-                {
-                    var cachedFileName = Path.GetFileName(cachedDll);
-                    var cachedTfm = ExtractTargetFrameworkFromPath(cachedDll);
-
-                    var matchingDebugDll = debugDlls.FirstOrDefault(d =>
-                    {
-                        // Filename must match
-                        if (!string.Equals(Path.GetFileName(d), cachedFileName, StringComparison.OrdinalIgnoreCase))
-                            return false;
-
-                        // If both have TFM, they must match
-                        var debugTfm = ExtractTargetFrameworkFromPath(d);
-                        if (cachedTfm != null && debugTfm != null)
-                            return string.Equals(cachedTfm, debugTfm, StringComparison.OrdinalIgnoreCase);
-
-                        // If at least one has no TFM, allow match (backward compatibility)
-                        return true;
-                    });
-
-                    if (matchingDebugDll != null)
-                    {
-                        if (cmd.Verbose)
-                        {
-                            // Show relative path from version directory for cleaner output
-                            var relativePath = Path.GetRelativePath(versionDir, cachedDll);
-                            _logger.Debug($"  → {relativePath}");
-                        }
-                        File.Copy(matchingDebugDll, cachedDll, true);
-                        replacedCount++;
-                    }
-                }
-
-                // match and replace PDBs by filename AND target framework
-                foreach (var cachedPdb in cachedPdbs)
-                {
-                    var cachedFileName = Path.GetFileName(cachedPdb);
-                    var cachedTfm = ExtractTargetFrameworkFromPath(cachedPdb);
-
-                    var matchingDebugPdb = debugPdbs.FirstOrDefault(p =>
-                    {
-                        // Filename must match
-                        if (!string.Equals(Path.GetFileName(p), cachedFileName, StringComparison.OrdinalIgnoreCase))
-                            return false;
-
-                        // If both have TFM, they must match
-                        var debugTfm = ExtractTargetFrameworkFromPath(p);
-                        if (cachedTfm != null && debugTfm != null)
-                            return string.Equals(cachedTfm, debugTfm, StringComparison.OrdinalIgnoreCase);
-
-                        // If at least one has no TFM, allow match (backward compatibility)
-                        return true;
-                    });
-
-                    if (matchingDebugPdb != null)
-                    {
-                        if (cmd.Verbose)
-                        {
-                            // Show relative path from version directory for cleaner output
-                            var relativePath = Path.GetRelativePath(versionDir, cachedPdb);
-                            _logger.Debug($"  → {relativePath}");
-                        }
-                        File.Copy(matchingDebugPdb, cachedPdb, true);
-                        replacedCount++;
-                    }
-                }
+                // Process ref folder (reference assemblies)
+                var refPath = Path.Combine(versionDir, "ref");
+                replacedCount += ProcessCacheFolder(cmd, refPath, versionDir, debugDlls, debugPdbs, "ref");
             }
 
             return replacedCount;
