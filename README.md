@@ -79,6 +79,15 @@ Get detailed output while forcing a rebuild:
 debugify --verbose --rebuild -c Debug
 ```
 
+### Override Package ID
+
+When working with projects like Avalonia where multiple projects target the same NuGet package:
+```bash
+debugify -p ./Avalonia --packageid Avalonia -v 11.0.0
+```
+
+This will use "Avalonia" as the package ID instead of inferring it from the project file, allowing you to build multiple projects that contribute to a single NuGet package.
+
 ### Cleanup
 
 Remove all debug DLLs from the NuGet cache:
@@ -101,3 +110,4 @@ debugify list
 - `-p, --path` - Path to *.csproj file or a folder that contains it
 - `--verbose` - Set output to verbose messages
 - `--buildargs` - Additional arguments for dotnet build (e.g., " --no-restore")
+- `--packageid` - Override the package ID for the NuGet cache lookup. Useful when building projects where the NuGet package name differs from the project's PackageId/AssemblyName (e.g., Avalonia projects where multiple projects contribute to a single package)

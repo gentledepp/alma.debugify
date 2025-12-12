@@ -32,6 +32,9 @@ namespace alma.debugify
         [Option( "buildargs", Required=false,HelpText = "Additional arguments for dotnet build. e.g. \" --no-restore\"")]
         public string BuildArguments { get; set; }
 
+        [Option("packageid", Required=false, HelpText = "Override the package ID. Use this when the NuGet package ID differs from the project's PackageId/AssemblyName.")]
+        public string PackageId { get; set; }
+
         [Usage(ApplicationAlias = "debugify")]
         public static IEnumerable<Example> Examples
         {
@@ -41,6 +44,7 @@ namespace alma.debugify
                  new Example("Debugify a specific version with Release configuration", new DebugCommand { Version = "1.6.6", Configuration = "Release" }),
                  new Example("Force a full rebuild", new DebugCommand { Rebuild = true }),
                  new Example("Specify a csproj file with a version", new DebugCommand { Path = "./MyProject.csproj", Version = "1.6.6" }),
+                 new Example("Override package ID for Avalonia projects", new DebugCommand { Path = "./MyApp", PackageId = "Avalonia", Version = "11.0.0" }),
                  new Example("Verbose output with rebuild in Debug mode", new DebugCommand { Verbose = true, Rebuild = true, Configuration = "Debug" })
               };
            }
@@ -80,6 +84,20 @@ namespace alma.debugify
                 
                 if (cmd.Verbose) _logger.Debug($"Path: {cmd.Path}");
 
+            }
+
+            // Validate packageid override if specified
+            if (!string.IsNullOrWhiteSpace(cmd.PackageId))
+            {
+                var packageIdValidator = new Regex(@"^[\w\.\-]+$");
+                if (!packageIdValidator.IsMatch(cmd.PackageId))
+                {
+                    _logger.Error($"Error: '{cmd.PackageId}' is not a valid package ID. Package IDs can only contain alphanumeric characters, dots, and hyphens.");
+                    return;
+                }
+
+                if (cmd.Verbose)
+                    _logger.Debug($"Package ID override: {cmd.PackageId}");
             }
 
             // find it within the current solution
@@ -141,6 +159,12 @@ namespace alma.debugify
                 .AddRow("[grey]Rebuild[/]", cmd.Rebuild ? "[green]Enabled[/]" : "[dim]Disabled[/]")
                 .AddRow("[grey]Projects to build[/]", $"[cyan]{projectsInCache.Count}[/] of [white]{projectFiles.Count}[/]")
                 .AddRow("[grey]Version to build[/]", $"[cyan]{projectsInCache.FirstOrDefault()?.Version}[/]");
+
+            // Add package ID override row if specified
+            if (!string.IsNullOrWhiteSpace(cmd.PackageId))
+            {
+                settingsTable.AddRow("[grey]Package ID override[/]", $"[yellow]{cmd.PackageId}[/]");
+            }
 
             AnsiConsole.Write(settingsTable);
             AnsiConsole.WriteLine();
@@ -308,7 +332,7 @@ namespace alma.debugify
                         {
                             var packageId = GetPackageId(csproj);
 
-                            yield return new CsprojInfo(packageId, version ?? cmd.Version, csproj);
+                            yield return new CsprojInfo(packageId, version ?? cmd.Version, csproj, cmd.PackageId);
                         }
                     }
                     else
@@ -331,7 +355,7 @@ namespace alma.debugify
                         {
                             var packageId = GetPackageId(csproj);
 
-                            yield return new CsprojInfo(packageId, version ?? cmd.Version, csproj);   
+                            yield return new CsprojInfo(packageId, version ?? cmd.Version, csproj, cmd.PackageId);
                         }
                     }
                     else
@@ -344,7 +368,7 @@ namespace alma.debugify
         {
             EnsureCsprojFile(filePath);
 
-            var findVersion = new Regex(@"<Version>\s*(?<version>\d+\.\d+\.\d+(\.\d+)?[\d\w_-]*?)\s*</Version>");
+            var findVersion = new Regex(@"<Version>\s*(?<version>\d+\.\d+\.\d+(\.\d+)?(-[\w\.\-]+)?)\s*</Version>");
 
             // First, try to find version in the csproj itself
             var m = findVersion.Match(File.ReadAllText(filePath));
@@ -355,13 +379,60 @@ namespace alma.debugify
             }
 
             // If not found in csproj, search for Directory.Build.props in parent hierarchy
-            if (TryFindDirectoryBuildProps(filePath, out var buildPropsPath))
+            var currentDir = Path.GetDirectoryName(filePath);
+            while (currentDir != null)
             {
-                m = findVersion.Match(File.ReadAllText(buildPropsPath));
-                if (m.Success)
+                var candidatePath = Path.Combine(currentDir, "Directory.Build.props");
+                if (File.Exists(candidatePath))
                 {
-                    version = m.Groups["version"].Value;
-                    return true;
+                    // Try to find version in this Directory.Build.props
+                    if (TryFindVersionInPropsFile(candidatePath, findVersion, out version))
+                    {
+                        return true;
+                    }
+                }
+
+                // Move to parent directory
+                var parent = Directory.GetParent(currentDir);
+                currentDir = parent?.FullName;
+            }
+
+            version = null;
+            return false;
+        }
+
+        private bool TryFindVersionInPropsFile(string propsFilePath, Regex findVersion, out string version)
+        {
+            var content = File.ReadAllText(propsFilePath);
+
+            // Try to find version directly in this file
+            var m = findVersion.Match(content);
+            if (m.Success)
+            {
+                version = m.Groups["version"].Value;
+                return true;
+            }
+
+            // If not found, check for Import elements and search those files
+            var importRegex = new Regex(@"<Import\s+Project=""(?<path>[^""]+)""\s*/>");
+            var imports = importRegex.Matches(content);
+
+            foreach (Match import in imports)
+            {
+                var importPath = import.Groups["path"].Value;
+                // Resolve relative path based on the location of the props file
+                var baseDir = Path.GetDirectoryName(propsFilePath);
+                var resolvedPath = Path.GetFullPath(Path.Combine(baseDir, importPath));
+
+                if (File.Exists(resolvedPath))
+                {
+                    var importedContent = File.ReadAllText(resolvedPath);
+                    var importMatch = findVersion.Match(importedContent);
+                    if (importMatch.Success)
+                    {
+                        version = importMatch.Groups["version"].Value;
+                        return true;
+                    }
                 }
             }
 
@@ -802,9 +873,9 @@ namespace alma.debugify
             public string ActualVersion { get; private set; }
             public string Path { get; }
 
-            public CsprojInfo(string packageId, string version, string path)
+            public CsprojInfo(string packageId, string version, string path, string packageIdOverride = null)
             {
-                PackageId = packageId;
+                PackageId = packageIdOverride ?? packageId;
                 Version = version;
                 Path = path;
                 ActualVersion = version;
