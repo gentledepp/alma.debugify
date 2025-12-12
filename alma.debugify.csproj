@@ -8,7 +8,7 @@
     <PackAsTool>true</PackAsTool>
     <ToolCommandName>debugify</ToolCommandName>
     <PackageOutputPath>./nupkg</PackageOutputPath>
-    <Version>1.3.2.0</Version>
+    <Version>1.3.3.0</Version>
     <Authors>gentledepp</Authors>
     <Company />
     <Product />
@@ -21,6 +21,8 @@
     <PackageLicenseFile>LICENSE.txt</PackageLicenseFile>
     <PackageReadmeFile>README.md</PackageReadmeFile>
     <PackageReleaseNotes>
+	    #1.3.3.0
+		- version compare normalizes versions so 1.6.8 equals 1.6.8.0
 		#1.3.2.0
 		- does only replace packages of specific version in nuget cache (not all versions)
 		- also replaces dlls in ref subfolder
