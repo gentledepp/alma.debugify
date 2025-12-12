@@ -2,7 +2,8 @@
   "profiles": {
     "nuget.debugify": {
       "commandName": "Project",
-      "workingDirectory": "C:\\Code_gh\\Dotmim.Sync_gd\\Projects"
+      "commandLineArgs": "--verbose --packageid Avalonia",
+      "workingDirectory": "C:\\Code_gh\\Avalonia_gd\\src\\Avalonia.Controls"
     }
   }
 }
