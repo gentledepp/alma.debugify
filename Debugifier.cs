@@ -139,7 +139,8 @@ namespace alma.debugify
                 .AddColumn(new TableColumn("[white]Value[/]").LeftAligned())
                 .AddRow("[grey]Configuration[/]", $"[yellow]{cmd.Configuration}[/]")
                 .AddRow("[grey]Rebuild[/]", cmd.Rebuild ? "[green]Enabled[/]" : "[dim]Disabled[/]")
-                .AddRow("[grey]Projects to build[/]", $"[cyan]{projectsInCache.Count}[/] of [white]{projectFiles.Count}[/]");
+                .AddRow("[grey]Projects to build[/]", $"[cyan]{projectsInCache.Count}[/] of [white]{projectFiles.Count}[/]")
+                .AddRow("[grey]Version to build[/]", $"[cyan]{projectsInCache.FirstOrDefault()?.Version}[/]");
 
             AnsiConsole.Write(settingsTable);
             AnsiConsole.WriteLine();
@@ -466,17 +467,46 @@ namespace alma.debugify
             return match.Success ? match.Groups["version"].Value : null;
         }
 
+        /// <summary>
+        /// Compares two version strings for equality, treating a missing fourth segment (revision)
+        /// as equivalent to zero. Supports prerelease suffixes (e.g., "1.6.8-alpha01").
+        /// </summary>
+        /// <param name="version1">The first version string to compare.</param>
+        /// <param name="version2">The second version string to compare.</param>
+        /// <returns>True if the versions are semantically equal; otherwise, false.</returns>
         private static bool VersionsMatch(string version1, string version2)
         {
-            if (string.IsNullOrEmpty(version1) || string.IsNullOrEmpty(version2))
+            if (string.IsNullOrWhiteSpace(version1) || string.IsNullOrWhiteSpace(version2))
                 return false;
 
-            // Normalize versions by trimming and lowercasing
             return string.Equals(
-                version1.Trim(),
-                version2.Trim(),
+                NormalizeVersion(version1),
+                NormalizeVersion(version2),
                 StringComparison.OrdinalIgnoreCase
             );
+        }
+
+        /// <summary>
+        /// Normalizes a version string by ensuring the numeric portion has exactly four segments,
+        /// appending ".0" for missing revision. Preserves any prerelease suffix.
+        /// </summary>
+        /// <param name="version">The version string to normalize.</param>
+        /// <returns>The normalized version string with four numeric segments.</returns>
+        private static string NormalizeVersion(string version)
+        {
+            var trimmed = version.Trim();
+    
+            // Split off prerelease suffix (e.g., "-alpha01")
+            var hyphenIndex = trimmed.IndexOf('-');
+            var numericPart = hyphenIndex >= 0 ? trimmed[..hyphenIndex] : trimmed;
+            var suffix = hyphenIndex >= 0 ? trimmed[hyphenIndex..] : string.Empty;
+
+            // Ensure exactly 4 segments in numeric part
+            var segments = numericPart.Split('.');
+            if (segments.Length == 3)
+                numericPart += ".0";
+
+            return numericPart + suffix;
         }
 
         private int ProcessCacheFolder(DebugCommand cmd, string folderPath, string versionDir, List<string> debugDlls, List<string> debugPdbs, string folderType)
